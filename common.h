@@ -3,6 +3,8 @@
 
 #include <string>
 
+#define PIZZLY_VERSION "0.37.0"
+
 struct ProgramOptions {
   std::string gtf;
   std::string cache;

@@ -43,7 +43,7 @@ parseCommandLine(ProgramOptions & options, int argc, char const ** argv) {
   seqan::setRequired(parser, "o");
   seqan::setRequired(parser, "i");
   seqan::setRequired(parser, "F");
-  
+  seqan::setVersion(parser, std::string(PIZZLY_VERSION));  
 
   // Parse command line.
   seqan::ArgumentParser::ParseResult res = seqan::parse(parser, argc, argv);
