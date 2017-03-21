@@ -1,3 +1,5 @@
+<div style="text-align:center"><img src="logo.jpg /></div>
+
 # pizzly 
 
 Fast fusion detection using kallisto
@@ -7,8 +9,6 @@ Fast fusion detection using kallisto
 pizzly is a program for detecting gene fusions from RNA-Seq data of cancer samples. 
 It requires running [kallisto](https://pachterlab.github.io/kallisto) with the `--fusion`
 parameter (available in version `0.43.1` or later). 
-
-
 
 ### Building
 
