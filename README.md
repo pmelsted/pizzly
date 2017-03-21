@@ -14,7 +14,7 @@ parameter (available in version `0.43.1` or later).
 
 pizzly uses the [SeqAn](http://www.seqan.de/) and requires a recent compiler with `c++14` enabled.
 This means `gcc 4.9` or later on linux or `clang 3.5` or later. Since these compilers are not always
-awailable on cluster systems we provide a precompiled binary under releases. Compiling pizzly also
+awailable on cluster systems we provide a precompiled binary under [releases](https://github.com/pmelsted/pizzly/releases). Compiling pizzly also
 requires `cmake 3.0.0` or later.
 
 In order to compile just run the following in the source directory
