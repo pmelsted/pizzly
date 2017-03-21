@@ -29,7 +29,7 @@ make install
 ### Ingredients
 
 Pizzly requires the reference transcriptome in FASTA format as well as a GTF file describing the transcriptome.
-We recommend using the (Ensembl)[http://www.ensembl.org/index.html] transcriptomes.
+We recommend using the [Ensembl](http://www.ensembl.org/index.html) transcriptomes.
 
 The example below assumes you have your transcriptome in FASTA format as `index.fa.gz`, the GTF file `index.gtf.gz` 
 and your paired-end RNA-Seq data sets in `r1.fastq.g` and `r2.fastq.gz
