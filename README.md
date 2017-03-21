@@ -1,4 +1,4 @@
-<div style="text-align:center"><img src="logo.jpg /></div>
+![pizzly](logo.jpg)
 
 # pizzly 
 
