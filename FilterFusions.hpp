@@ -786,12 +786,9 @@ void processFusions(const Transcriptome &trx, ProgramOptions& options) {
     // write json headers and info
     jsonOut << "{\n  \"genes\" : [\n";
     bool firstJsonCommaGenes = true;
-    std::string j_gene, j_trans, j_reads;
-    std::vector<std::string> j_transv, j_readsv;
-    std::stringstream f_recs;
-    j_gene.reserve(1000);
-    j_trans.reserve(10000);
-    j_reads.reserve(10000);
+    std::vector<int> readsInTr, readsInGene;
+    readsInTr.reserve(1000);
+    readsInGene.reserve(1000);
     // write output
     for (const auto &gp1 : G) {
       const auto &g1 = gp1.first;
@@ -800,13 +797,8 @@ void processFusions(const Transcriptome &trx, ProgramOptions& options) {
       for (const auto &gg2 : Gg1) {
         const auto& g2 = gg2.first;
         if (g1 < g2) {
-          j_gene.clear();
-          j_trans.clear();
-          j_reads.clear();
-          f_recs.clear();
-          j_transv.clear();
-          j_readsv.clear();
 
+          readsInGene.clear();
           const auto &gm2 = trx.genes.find(g2);
           const auto &v = gg2.second;
           int paircount = 0;
@@ -835,18 +827,23 @@ void processFusions(const Transcriptome &trx, ProgramOptions& options) {
             } 
           }
 
-          
-          if (!firstJsonCommaGenes) {
-            j_gene = ",\n"; 
-          }
-          firstJsonCommaGenes = false;
-
-          j_gene  += "    {\n      \"geneA\" : { \"id\" : \"" + g1 + "\", \"name\" : \""+ gm1->second.name +"\"},\n"
-                   +        "      \"geneB\" : { \"id\" : \"" + g2 + "\", \"name\" : \""+ gm2->second.name + "\"},\n"
-                   +        "      \"paircount\" : " + std::to_string(paircount) + ",\n      \"splitcount\" : " + std::to_string(splitcount) + ",\n" 
-                   +        "      \"transcripts\" : [\n";
-
           bool hasAnyTr = false;
+          auto writeGeneInfoToJsonStream = [&]() {
+            if (hasAnyTr) {
+              return;
+            }
+            if (!firstJsonCommaGenes) {
+              jsonOut <<  ",\n"; 
+            }
+            firstJsonCommaGenes = false;
+            jsonOut << "    {\n      \"geneA\" : { \"id\" : \"" << g1 << "\", \"name\" : \""<< gm1->second.name <<"\"},\n"
+                    <<        "      \"geneB\" : { \"id\" : \"" << g2 << "\", \"name\" : \""<< gm2->second.name << "\"},\n"
+                    <<        "      \"paircount\" : " << std::to_string(paircount) << ",\n      \"splitcount\" : " << std::to_string(splitcount) << ",\n" 
+                    <<        "      \"transcripts\" : [\n";
+            hasAnyTr = true;
+          };
+
+          bool firstJsonCommaTrans = true;
           SplitInfoMap snappedSplits = snapToJunction(splits, 4);      
           for (auto & spp : snappedSplits) {
             auto &sp = spp.first;          
@@ -857,50 +854,61 @@ void processFusions(const Transcriptome &trx, ProgramOptions& options) {
             int tp2 = sp.pos2 + ed2;
             const auto & seq1 = trx.seqs.find(sp.tr1)->second;
             const auto & seq2 = trx.seqs.find(sp.tr2)->second;
-            j_trans.clear();
-            j_reads.clear();
+            
+            
+            readsInTr.clear();
             int t_count = 0;
+
             if ((gm1->second.transcripts.count(sp.tr1) > 0 && gm2->second.transcripts.count(sp.tr2) > 0)
             ||  (gm1->second.transcripts.count(sp.tr2) > 0 && gm2->second.transcripts.count(sp.tr1) > 0)) {
-              std::string fasta_name = sp.tr1 + "_0:" + std::to_string(tp1) + "_" + sp.tr2 + "_" + std::to_string(tp2) + ":" + std::to_string(seqan::length(seq2));
-              /*if (!firstJsonCommaTrans) {
-                j_trans += ",\n";
-              }
-              firstJsonCommaTrans = false;*/
-              j_trans +="        {\n          \"fasta_record\": \"" + fasta_name +  "\",\n";
-              j_trans +=           "          \"transcriptA\": {\"id\" : \"" + sp.tr1 + "\", \"startPos\" : " + std::to_string((sp.dir1) ? 0 : tp1)
-                      + ", \"endPos\" : " + std::to_string((sp.dir1) ? tp1+1 : seqan::length(seq1)) + ", \"edit\" : " + std::to_string(ed1) 
-                      + ", \"strand\" : " + ((sp.strand1) ? "true" : "false") + "},\n";
-                      
-              j_trans +=           "          \"transcriptB\": {\"id\" : \"" + sp.tr2 + "\", \"startPos\" : " + std::to_string((sp.dir2) ? 0 : tp2)
-                      + ", \"endPos\" : " + std::to_string((sp.dir2) ? tp2+1 : seqan::length(seq2)) + ", \"edit\" : " + std::to_string(ed2)
-                      + ", \"strand\" : " + ((sp.strand2) ? "true" : "false") + "},\n"
-                      + "          \"support\" : " + std::to_string(split_reads) + ",\n"
-                      + "          \"reads\" : [";
-              bool firstReadComma = true;
-              for (int i = 0; i < v.size(); i++) {              
-                if ((findTranscriptInVector(fusions[v[i]].second.tr1, sp.tr1) && findTranscriptInVector(fusions[v[i]].second.tr2, sp.tr2))) {
-                  if (!firstReadComma) {
-                    j_trans += ", ";
+              
+              if (filter) {
+                for (int i = 0; i < v.size(); i++) {              
+                  if ((findTranscriptInVector(fusions[v[i]].second.tr1, sp.tr1) && findTranscriptInVector(fusions[v[i]].second.tr2, sp.tr2))) {
+                    t_count++;
+                    readsInTr.push_back(i);
                   }
-                  firstReadComma = false;
-                  j_trans += std::to_string(i);
-                  t_count++;
                 }
               }
-              j_trans +=  "]\n";
-              j_trans += "        }";
-              
-              
-              if (!filter || ((t_count >= 1) && std::abs(ed1) <= 10 && std::abs(ed2) <= 10)) {
-                hasAnyTr = true;
-                j_transv.push_back(j_trans); // copy
 
-                f_recs << ">" + fasta_name+ "\n";
-                f_recs << seqan::prefix(seq1, tp1);
-                f_recs << seqan::suffix(seq2, tp2);
-                f_recs << "\n"; 
-              }              
+              if (!filter || ((t_count >= 1) && std::abs(ed1) <= 10 && std::abs(ed2) <= 10)) {
+                writeGeneInfoToJsonStream();
+                
+                std::string fasta_name = sp.tr1 + "_0:" + std::to_string(tp1) + "_" + sp.tr2 + "_" + std::to_string(tp2) + ":" + std::to_string(seqan::length(seq2));
+               
+                if (!firstJsonCommaTrans) {
+                  jsonOut << ",\n";
+                }
+                firstJsonCommaTrans = false;
+                jsonOut <<"        {\n          \"fasta_record\": \"" << fasta_name <<  "\",\n"
+                        <<           "          \"transcriptA\": {\"id\" : \"" << sp.tr1 << "\", \"startPos\" : " << std::to_string((sp.dir1) ? 0 : tp1)
+                        << ", \"endPos\" : " << std::to_string((sp.dir1) ? tp1+1 : seqan::length(seq1)) << ", \"edit\" : " << std::to_string(ed1) 
+                        << ", \"strand\" : " << ((sp.strand1) ? "true" : "false") << "},\n";
+                        
+                jsonOut <<           "          \"transcriptB\": {\"id\" : \"" << sp.tr2 << "\", \"startPos\" : " << std::to_string((sp.dir2) ? 0 : tp2)
+                        << ", \"endPos\" : " << std::to_string((sp.dir2) ? tp2+1 : seqan::length(seq2)) << ", \"edit\" : " << std::to_string(ed2)
+                        << ", \"strand\" : " << ((sp.strand2) ? "true" : "false") << "},\n"
+                        << "          \"support\" : " << std::to_string(t_count) << ",\n"
+                        << "          \"reads\" : [";
+                
+                for (int i = 0; i < readsInTr.size(); i++) {
+                  if (i > 0) {
+                    jsonOut << ", ";
+                  }
+                  jsonOut << i;
+                }                
+                jsonOut <<  "]\n";
+                jsonOut << "        }";
+                std::copy(readsInTr.begin(), readsInTr.end(), std::back_inserter(readsInGene));
+
+                fastaOut << ">" << fasta_name << "\n"
+                         << seqan::prefix(seq1, tp1)
+                         << seqan::suffix(seq2, tp2)
+                         << "\n"; 
+
+
+              }    
+                        
             }
 
             //std::cout << std::endl; 
@@ -912,7 +920,6 @@ void processFusions(const Transcriptome &trx, ProgramOptions& options) {
               if (sr.type == SplitRecord::PAIR) {
                 for (const auto &t1 : sr.tr1) {
                   for (const auto &t2 : sr.tr2) {
-                    int t_count = 0;
                     int rlen1 = seqan::length(fr.seq1);
                     int rlen2 = seqan::length(fr.seq2); 
 
@@ -947,45 +954,54 @@ void processFusions(const Transcriptome &trx, ProgramOptions& options) {
                     tp1 += ed1;
                     tp2 += ed2;
 
+                    readsInTr.clear();
+                    int t_count = 0;
+
 
                     if ((gm1->second.transcripts.count(t1.tr) > 0 && gm2->second.transcripts.count(t2.tr) > 0)
                     ||  (gm1->second.transcripts.count(t2.tr) > 0 && gm2->second.transcripts.count(t1.tr) > 0)) {
-                      std::string fasta_name =  t1.tr + "_0:" + std::to_string(tp1) + "_" + t2.tr + "_" + std::to_string(tp2) + ":" + std::to_string(seqan::length(seq2));
-                      j_trans += "        {\n          \"fasta_record\": \"" + fasta_name +  "\",\n";
-                      j_trans +=           "          \"transcriptA\": {\"id\" : \"" + t1.tr + "\", \"startPos\" : " + std::to_string((sr.dir1) ? 0 : tp1)
-                              + ", \"endPos\" : " + std::to_string((sr.dir1) ? tp1+1 : seqan::length(seq1)) + ", \"edit\" : " + std::to_string(ed1)
-                              + ", \"strand\" : " + ((t1strand) ? "true" : "false") + "},\n";
-                      j_trans +=           "          \"transcriptB\": {\"id\" : \"" + t2.tr + "\", \"startPos\" : " + std::to_string((sr.dir2) ? 0 : tp2)
-                              + ", \"endPos\" : " + std::to_string((sr.dir2) ? tp2+1 : seqan::length(seq2)) + ", \"edit\" : " + std::to_string(ed2)
-                              + ", \"strand\" : " + ((t2strand) ? "true" : "false") + "},\n"
-                              + "          \"support\" : " + std::to_string(paircount) + ",\n"
-                              + "          \"reads\" : [";
 
-                      bool firstReadComma = true;
                       for (int i = 0; i < v.size(); i++) {              
                         if ((findTranscriptInVector(fusions[v[i]].second.tr1, t1.tr) && findTranscriptInVector(fusions[v[i]].second.tr2, t2.tr))) {
-
-                          auto x = fusions[v[i]];
-                          
-                          if (!firstReadComma) {
-                            j_trans + ", ";
-                          }
-                          firstReadComma = false;
-                          j_trans += std::to_string(i);
                           t_count++;
+                          readsInTr.push_back(i);
                         }
                       }
-                      j_trans += "]\n";
-                      j_trans += "        }";
-                      
-                      
+
+
                       if (!filter || (t_count >= 2)) {
-                        hasAnyTr = true;
-                        j_transv.push_back(j_trans); // copy
-                        f_recs <<  ">" + fasta_name +  "\n";
-                        f_recs << seqan::prefix(seq1, tp1);
-                        f_recs << seqan::suffix(seq2, tp2);                      
-                        f_recs << "\n"; 
+                        writeGeneInfoToJsonStream();
+
+                        if (!firstJsonCommaTrans) {
+                          jsonOut << ",\n";
+                        }
+                        firstJsonCommaTrans = false;
+
+                        std::string fasta_name =  t1.tr + "_0:" + std::to_string(tp1) + "_" + t2.tr + "_" + std::to_string(tp2) + ":" + std::to_string(seqan::length(seq2));
+                        jsonOut << "        {\n          \"fasta_record\": \"" << fasta_name << "\",\n"
+                                <<           "          \"transcriptA\": {\"id\" : \"" << t1.tr << "\", \"startPos\" : " << std::to_string((sr.dir1) ? 0 : tp1)
+                                << ", \"endPos\" : " << std::to_string((sr.dir1) ? tp1+1 : seqan::length(seq1)) << ", \"edit\" : " << std::to_string(ed1)
+                                << ", \"strand\" : " << ((t1strand) ? "true" : "false") << "},\n";
+                        jsonOut <<           "          \"transcriptB\": {\"id\" : \"" << t2.tr << "\", \"startPos\" : " << std::to_string((sr.dir2) ? 0 : tp2)
+                                << ", \"endPos\" : " << std::to_string((sr.dir2) ? tp2+1 : seqan::length(seq2)) << ", \"edit\" : " << std::to_string(ed2)
+                                << ", \"strand\" : " << ((t2strand) ? "true" : "false") << "},\n"
+                                << "          \"support\" : " << std::to_string(paircount) << ",\n"
+                                << "          \"reads\" : [";
+
+                        for (int i = 0; i < readsInTr.size(); i++) {
+                          if (i > 0) {
+                            jsonOut << ", ";
+                          }
+                          jsonOut << i;
+                        }                
+                        jsonOut <<  "]\n        }";
+
+                        std::copy(readsInTr.begin(), readsInTr.end(), std::back_inserter(readsInGene));
+
+                        fastaOut << ">" << fasta_name << "\n"
+                                 << seqan::prefix(seq1, tp1)
+                                 << seqan::suffix(seq2, tp2)
+                                 << "\n"; 
                       }
                     }
                   }
@@ -993,47 +1009,30 @@ void processFusions(const Transcriptome &trx, ProgramOptions& options) {
               }       
             }
           }
-          
 
           // write out supporting reads
-          bool firstJsonRead = true;
-          j_reads =  "      \"readpairs\" : [\n";
-          /*   */
-          for (int i = 0; i < v.size(); i++) {
-            const auto& fr = fusions[v[i]].first;
-            const auto& sr = fusions[v[i]].second;
-            if (i > 0) {
-              j_reads +=",\n";
-            }
-            j_reads +="        {\n";
-            j_reads +="          \"type\" : \"";
-            j_reads += ((sr.type == SplitRecord::SPLIT) ? "SPLIT" : "PAIR" );
-            j_reads += "\",\n";
-            j_reads += "          \"read1\" : { \"name\" : \"" + fr.n1 + "\", \"seq\" : \"" + fr.seq1 
-                    + "\", \"splitpos\" : " + std::to_string(sr.splitPos1) + ", \"direction\" : \"" + ((sr.dir1)? "true" : "false") + "\", " 
-                    + "\"kmerpos\" : { \"start\" : " + std::to_string(fr.kpos1.first) + ", \"stop\" : " + std::to_string(fr.kpos1.second) + "}},\n"
-                    + "          \"read2\" : { \"name\" : \"" + fr.n2 + "\", \"seq\" : \"" + fr.seq2 
-                    + "\", \"splitpos\" : " + std::to_string(sr.splitPos2) + ", \"direction\" : \"" + ((sr.dir2)? "true" : "false") + "\", "
-                    + "\"kmerpos\" : { \"start\" : " + std::to_string(fr.kpos2.first) + ", \"stop\" : " + std::to_string(fr.kpos2.second) + "}}\n"
-                    + "        }";
-          }
-          j_reads += "\n      ]\n    }";
-
           if (hasAnyTr) {
-            // output basic gene pair info
-            jsonOut << j_gene;
-
-            // output all transcript pairs passing filter
-            for (const auto &jt : j_transv) {
-              jsonOut << jt;
+            jsonOut << "\n      ],\n"; // closing transcripts
+            bool firstJsonRead = true;
+            jsonOut <<  "      \"readpairs\" : [\n";
+            /*   */
+            for (int i = 0; i < v.size(); i++) {
+              const auto& fr = fusions[v[i]].first;
+              const auto& sr = fusions[v[i]].second;
+              if (i > 0) {
+                jsonOut <<",\n";
+              }
+              jsonOut << "        {\n" 
+                      << "          \"type\" : \"" << ((sr.type == SplitRecord::SPLIT) ? "SPLIT" : "PAIR" ) << "\",\n"
+                      << "          \"read1\" : { \"name\" : \"" << fr.n1 << "\", \"seq\" : \"" << fr.seq1 
+                      << "\", \"splitpos\" : " << std::to_string(sr.splitPos1) << ", \"direction\" : \"" << ((sr.dir1)? "true" : "false") << "\", " 
+                      << "\"kmerpos\" : { \"start\" : " << std::to_string(fr.kpos1.first) << ", \"stop\" : " << std::to_string(fr.kpos1.second) << "}},\n"
+                      << "          \"read2\" : { \"name\" : \"" << fr.n2 << "\", \"seq\" : \"" << fr.seq2 
+                      << "\", \"splitpos\" : " << std::to_string(sr.splitPos2) << ", \"direction\" : \"" << ((sr.dir2)? "true" : "false") << "\", "
+                      << "\"kmerpos\" : { \"start\" : " << std::to_string(fr.kpos2.first) << ", \"stop\" : " << std::to_string(fr.kpos2.second) << "}}\n"
+                      << "        }";
             }
-            jsonOut << "\n      ],\n";
-
-            // output all supporting reads
-            jsonOut << j_reads;
-            
-            // output all fasta sequences for transcript pairs
-            fastaOut << f_recs.str();
+            jsonOut << "\n      ]\n    }";
           }
         }
       }
