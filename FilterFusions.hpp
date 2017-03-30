@@ -862,15 +862,15 @@ void processFusions(const Transcriptome &trx, ProgramOptions& options) {
             if ((gm1->second.transcripts.count(sp.tr1) > 0 && gm2->second.transcripts.count(sp.tr2) > 0)
             ||  (gm1->second.transcripts.count(sp.tr2) > 0 && gm2->second.transcripts.count(sp.tr1) > 0)) {
               
-              if (filter) {
-                for (int i = 0; i < v.size(); i++) {              
-                  if ((findTranscriptInVector(fusions[v[i]].second.tr1, sp.tr1) && findTranscriptInVector(fusions[v[i]].second.tr2, sp.tr2))) {
-                    t_count++;
-                    readsInTr.push_back(i);
-                  }
+              
+              for (int i = 0; i < v.size(); i++) {              
+                if ((findTranscriptInVector(fusions[v[i]].second.tr1, sp.tr1) && findTranscriptInVector(fusions[v[i]].second.tr2, sp.tr2))
+                 || (findTranscriptInVector(fusions[v[i]].second.tr1, sp.tr2) && findTranscriptInVector(fusions[v[i]].second.tr2, sp.tr1))) {
+                  t_count++;
+                  readsInTr.push_back(i);
                 }
               }
-
+              
               if (!filter || ((t_count >= 1) && std::abs(ed1) <= 10 && std::abs(ed2) <= 10)) {
                 writeGeneInfoToJsonStream();
                 
@@ -962,7 +962,8 @@ void processFusions(const Transcriptome &trx, ProgramOptions& options) {
                     ||  (gm1->second.transcripts.count(t2.tr) > 0 && gm2->second.transcripts.count(t1.tr) > 0)) {
 
                       for (int i = 0; i < v.size(); i++) {              
-                        if ((findTranscriptInVector(fusions[v[i]].second.tr1, t1.tr) && findTranscriptInVector(fusions[v[i]].second.tr2, t2.tr))) {
+                        if ((findTranscriptInVector(fusions[v[i]].second.tr1, t1.tr) && findTranscriptInVector(fusions[v[i]].second.tr2, t2.tr))
+                         || (findTranscriptInVector(fusions[v[i]].second.tr1, t2.tr) && findTranscriptInVector(fusions[v[i]].second.tr2, t1.tr))) {
                           t_count++;
                           readsInTr.push_back(i);
                         }

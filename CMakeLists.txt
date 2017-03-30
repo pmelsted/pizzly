@@ -24,7 +24,7 @@ include_directories( ${ZLIB_INCLUDE_DIRS} )
 add_definitions (${SEQAN_DEFINITIONS})
 
 # Add CXX flags found by find_package (SeqAn).
-set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SEQAN_CXX_FLAGS} -std=c++1y -DSEQAN_HAS_ZLIB=1" )
+set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SEQAN_CXX_FLAGS} -std=c++14  -DSEQAN_HAS_ZLIB=1" )
 set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}" )
 
 # Add executable and link against SeqAn dependencies.
