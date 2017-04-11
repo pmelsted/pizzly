@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <string>
 #include <functional>
+#include <limits>
 
 #include <seqan/align.h>
 #include <seqan/align_split.h>
@@ -716,7 +717,7 @@ void processFusions(const Transcriptome &trx, ProgramOptions& options) {
   auto mapToForwardExon = [&](const std::string &tr, int pos) -> std::pair<int,int> {
     const auto git = trx.trxToGeneId.find(tr);
 
-    int minPosDist = pos;
+    int minPosDist = std::numeric_limits<int>::max();
     int minNegDist = 0;
     if (git != trx.trxToGeneId.end()) {
       const std::string gid = git->second;
@@ -733,8 +734,7 @@ void processFusions(const Transcriptome &trx, ProgramOptions& options) {
           }  
           if ((b - pos) < minPosDist) {
             minPosDist = b - pos;
-          }
-          //mindist = std::min(std::min(pos-a, b - pos), mindist);
+          }          
         }
         a = b;
       }
@@ -828,7 +828,7 @@ void processFusions(const Transcriptome &trx, ProgramOptions& options) {
           }
 
           bool hasAnyTr = false;
-          auto writeGeneInfoToJsonStream = [&]() {
+          auto writeGeneInfoToJsonStream = [&](bool swap) {
             if (hasAnyTr) {
               return;
             }
@@ -836,9 +836,14 @@ void processFusions(const Transcriptome &trx, ProgramOptions& options) {
               jsonOut <<  ",\n"; 
             }
             firstJsonCommaGenes = false;
-            jsonOut << "    {\n      \"geneA\" : { \"id\" : \"" << g1 << "\", \"name\" : \""<< gm1->second.name <<"\"},\n"
-                    <<        "      \"geneB\" : { \"id\" : \"" << g2 << "\", \"name\" : \""<< gm2->second.name << "\"},\n"
-                    <<        "      \"paircount\" : " << std::to_string(paircount) << ",\n      \"splitcount\" : " << std::to_string(splitcount) << ",\n" 
+            if (!swap) {
+              jsonOut << "    {\n      \"geneA\" : { \"id\" : \"" << g1 << "\", \"name\" : \""<< gm1->second.name <<"\"},\n"
+                      <<        "      \"geneB\" : { \"id\" : \"" << g2 << "\", \"name\" : \""<< gm2->second.name << "\"},\n";
+            } else {
+              jsonOut << "    {\n      \"geneA\" : { \"id\" : \"" << g2 << "\", \"name\" : \""<< gm2->second.name <<"\"},\n"
+                      <<        "      \"geneB\" : { \"id\" : \"" << g1 << "\", \"name\" : \""<< gm1->second.name << "\"},\n";
+            }
+            jsonOut <<        "      \"paircount\" : " << std::to_string(paircount) << ",\n      \"splitcount\" : " << std::to_string(splitcount) << ",\n" 
                     <<        "      \"transcripts\" : [\n";
             hasAnyTr = true;
           };
@@ -872,7 +877,7 @@ void processFusions(const Transcriptome &trx, ProgramOptions& options) {
               }
               
               if (!filter || ((t_count >= 1) && std::abs(ed1) <= 10 && std::abs(ed2) <= 10)) {
-                writeGeneInfoToJsonStream();
+                writeGeneInfoToJsonStream(false);
                 
                 std::string fasta_name = sp.tr1 + "_0:" + std::to_string(tp1) + "_" + sp.tr2 + "_" + std::to_string(tp2) + ":" + std::to_string(seqan::length(seq2));
                
@@ -914,6 +919,7 @@ void processFusions(const Transcriptome &trx, ProgramOptions& options) {
             //std::cout << std::endl; 
           }
           if (!hasAnyTr) {
+            
             for (int i : v) {
               const FusionRecord& fr = fusions[i].first;
               const SplitRecord& sr = fusions[i].second;
@@ -940,19 +946,24 @@ void processFusions(const Transcriptome &trx, ProgramOptions& options) {
                     // pick most reliable
                     int ed1 = 0;
                     int ed2 = 0;
+                    int insLen = 0;
                     if (t1strand) {
                       ed1 = (ped1.first >= -10 && ped1.second > abs(ped1.first)) ? ped1.first : ped1.second;
+                      insLen += rlen1 + ed1;
                     } else {
                       ed1 = (ped1.second <= 10 && abs(ped1.first) > ped1.second) ? ped1.second : ped1.first;
+                      insLen += rlen1 - ed1;
                     }
                     if (t2strand) {
                       ed2 = (ped2.first >= -10 && ped2.second > abs(ped2.first)) ? ped2.first : ped2.second;
+                      insLen += rlen2 + ed2;
                     } else {
                       ed2 = (ped2.second <= 10 && abs(ped2.first) > ped2.second) ? ped2.second : ped2.first;
+                      insLen += rlen2 - ed2;
                     }
 
                     tp1 += ed1;
-                    tp2 += ed2;
+                    tp2 += ed2;                    
 
                     readsInTr.clear();
                     int t_count = 0;
@@ -970,24 +981,39 @@ void processFusions(const Transcriptome &trx, ProgramOptions& options) {
                       }
 
 
-                      if (!filter || (t_count >= 2)) {
-                        writeGeneInfoToJsonStream();
+                      if (!filter || (t_count >= 2 && insLen <= options.insertSize)) {
+                        writeGeneInfoToJsonStream(t1strand);
 
                         if (!firstJsonCommaTrans) {
                           jsonOut << ",\n";
                         }
                         firstJsonCommaTrans = false;
 
-                        std::string fasta_name =  t1.tr + "_0:" + std::to_string(tp1) + "_" + t2.tr + "_" + std::to_string(tp2) + ":" + std::to_string(seqan::length(seq2));
-                        jsonOut << "        {\n          \"fasta_record\": \"" << fasta_name << "\",\n"
-                                <<           "          \"transcriptA\": {\"id\" : \"" << t1.tr << "\", \"startPos\" : " << std::to_string((sr.dir1) ? 0 : tp1)
+                        std::string fasta_name;
+                        if (t1strand) {
+                          fasta_name = t1.tr + "_0:" + std::to_string(tp1) + "_" + t2.tr + "_" + std::to_string(tp2) + ":" + std::to_string(seqan::length(seq2));
+                          jsonOut << "        {\n          \"fasta_record\": \"" << fasta_name << "\",\n"
+                                  <<            "          \"transcriptA\": {\"id\" : \"" << t1.tr << "\", \"startPos\" : " << std::to_string((sr.dir1) ? 0 : tp1)
+                                  << ", \"endPos\" : " << std::to_string((sr.dir1) ? tp1+1 : seqan::length(seq1)) << ", \"edit\" : " << std::to_string(ed1)
+                                  << ", \"strand\" : " << ((t1strand) ? "true" : "false") << "},\n";
+                          jsonOut <<           "          \"transcriptB\": {\"id\" : \"" << t2.tr << "\", \"startPos\" : " << std::to_string((sr.dir2) ? 0 : tp2)
+                                  << ", \"endPos\" : " << std::to_string((sr.dir2) ? tp2+1 : seqan::length(seq2)) << ", \"edit\" : " << std::to_string(ed2)
+                                  << ", \"strand\" : " << ((t2strand) ? "true" : "false") << "},\n"
+                                  << "          \"support\" : " << std::to_string(paircount) << ",\n"
+                                  << "          \"reads\" : [";
+                        } else {
+                          fasta_name = t2.tr + "_0:" + std::to_string(tp2) + "_" + t1.tr + "_" + std::to_string(tp1) + ":" + std::to_string(seqan::length(seq1));
+                          jsonOut << "        {\n          \"fasta_record\": \"" << fasta_name << "\",\n"
+                                  <<            "          \"transcriptA\": {\"id\" : \"" << t2.tr << "\", \"startPos\" : " << std::to_string((sr.dir2) ? 0 : tp2)
+                                  << ", \"endPos\" : " << std::to_string((sr.dir2) ? tp2+1 : seqan::length(seq2)) << ", \"edit\" : " << std::to_string(ed2)
+                                  << ", \"strand\" : " << ((t2strand) ? "true" : "false") << "},\n";
+                          jsonOut <<            "          \"transcriptB\": {\"id\" : \"" << t1.tr << "\", \"startPos\" : " << std::to_string((sr.dir1) ? 0 : tp1)
                                 << ", \"endPos\" : " << std::to_string((sr.dir1) ? tp1+1 : seqan::length(seq1)) << ", \"edit\" : " << std::to_string(ed1)
-                                << ", \"strand\" : " << ((t1strand) ? "true" : "false") << "},\n";
-                        jsonOut <<           "          \"transcriptB\": {\"id\" : \"" << t2.tr << "\", \"startPos\" : " << std::to_string((sr.dir2) ? 0 : tp2)
-                                << ", \"endPos\" : " << std::to_string((sr.dir2) ? tp2+1 : seqan::length(seq2)) << ", \"edit\" : " << std::to_string(ed2)
-                                << ", \"strand\" : " << ((t2strand) ? "true" : "false") << "},\n"
+                                << ", \"strand\" : " << ((t1strand) ? "true" : "false") << "},\n"
                                 << "          \"support\" : " << std::to_string(paircount) << ",\n"
                                 << "          \"reads\" : [";
+                        }
+                        
 
                         for (int i = 0; i < readsInTr.size(); i++) {
                           if (i > 0) {
@@ -999,10 +1025,18 @@ void processFusions(const Transcriptome &trx, ProgramOptions& options) {
 
                         std::copy(readsInTr.begin(), readsInTr.end(), std::back_inserter(readsInGene));
 
-                        fastaOut << ">" << fasta_name << "\n"
-                                 << seqan::prefix(seq1, tp1)
-                                 << seqan::suffix(seq2, tp2)
-                                 << "\n"; 
+                        assert(t1strand != t2strand);
+                        if (t1strand) {
+                          fastaOut << ">" << fasta_name << "\n"
+                                  << seqan::prefix(seq1, tp1)
+                                  << seqan::suffix(seq2, tp2)
+                                  << "\n"; 
+                        } else {
+                          fastaOut  << ">" << fasta_name << "\n"
+                                  << seqan::prefix(seq2, tp2)
+                                  << seqan::suffix(seq1, tp1)
+                                  << "\n";
+                        }
                       }
                     }
                   }
