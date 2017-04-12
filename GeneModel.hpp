@@ -9,6 +9,14 @@
 enum Strandedness {FORWARD, REVERSE, UNKNOWN};
 enum BioType {PROTEIN, PSEUDO, OTHER};
 
+Strandedness operator~(const Strandedness &s) {
+  switch (s) {
+    case FORWARD: return REVERSE; break;
+    case REVERSE: return FORWARD; break;
+    case UNKNOWN: return REVERSE; break;
+  }
+}
+
 std::string typeToString(BioType t) {
   switch(t) {
     case BioType::PROTEIN:
