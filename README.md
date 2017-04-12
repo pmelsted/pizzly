@@ -52,18 +52,23 @@ This creates the file `output/fusion.txt` which is used by pizzly, finally we ru
 
 ```
 pizzly -k 31 --gtf index.gtf --cache index.cache.txt --align-score 2 \
-        --insert-size 250 --fasta index.fa.gz --output test output/fusion.txt
+        --insert-size 400 --fasta index.fa.gz --output test output/fusion.txt
 ```
 
 The parameters to set are 
 
-* `--insert-size`, which should be the maximum insert size of the paired-end library (kallisto will estimate this from the reads)
-* `--align-score`, the number of mismatches allowed when aligning reads to a reference transcript
+* `--insert-size`, which should be the maximum insert size of the paired-end library (kallisto will estimate this from the reads, default used is 400)
+* `--align-score`, the number of mismatches allowed when aligning reads to a reference transcript (default used is 2)
+* `--cache`, if this file does not exist, pizzly will parse the GTF (which can take up to a minute or two) and store the required data in the cached file. If the cache file exists (if you've run pizzly previously on the same GTF file), pizzly will parse this file instead, which is much faster than parsing the GTF. 
+
+
+A more sophisticated example is in the `test` directory which contains a `snakemake` workflow to index, quantify, call fusions and requantify using `kallisto` and `pizzly`.
+
 
 
 ### Output
 
-The `--output test` parameter is used as a prefix and two files are created `test.fusions.fasta` and `test.json`
+The `--output test` parameter is used as a prefix and two files are created `test.fusions.fasta` and `test.json`, this contains the filtered fusion calls. For unfiltered fusion calls, use the corresponding `.unfiltered` files.
 
 
 ### License
