@@ -18,22 +18,22 @@ parseCommandLine(ProgramOptions & options, int argc, char const ** argv) {
 
   // Define Options
   seqan::addOption(parser, seqan::ArgParseOption(
-      "k", "", "k-mer size",
+      "k", "", "k-mer size used in kallisto",
       seqan::ArgParseArgument::INTEGER, "K"));
   seqan::addOption(parser, seqan::ArgParseOption(
-      "a", "align-score", "Alignment cutoff",
+      "a", "align-score", "Maximum number of mismatches allowed (default: 2)",
       seqan::ArgParseArgument::INTEGER, "ALIGN_SCORE"));
   seqan::addOption(parser, seqan::ArgParseOption(
-      "i", "insert-size", "Maximum size of fragment",
+      "i", "insert-size", "Maximum fragment size of library (default: 400)",
       seqan::ArgParseArgument::INTEGER, "INSERT_SIZE"));
   seqan::addOption(parser, seqan::ArgParseOption(
       "o", "output", "Prefix for output files",
       seqan::ArgParseArgument::STRING, "OUTPUT_PREFIX"));
   seqan::addOption(parser, seqan::ArgParseOption(
-      "G", "gtf", "Annotation",
+      "G", "gtf", "Annotation in GTF format",
       seqan::ArgParseArgument::STRING, "GTF"));
   seqan::addOption(parser, seqan::ArgParseOption(
-      "C", "cache", "Annotation",
+      "C", "cache", "File for caching annotation (created if not present, otherwise reused from previous runs)",
       seqan::ArgParseArgument::STRING, "cache"));
   seqan::addOption(parser, seqan::ArgParseOption(
       "F", "fasta", "Fasta reference",
@@ -41,7 +41,6 @@ parseCommandLine(ProgramOptions & options, int argc, char const ** argv) {
 
   seqan::setRequired(parser, "k");
   seqan::setRequired(parser, "o");
-  seqan::setRequired(parser, "i");
   seqan::setRequired(parser, "F");
   seqan::setVersion(parser, std::string(PIZZLY_VERSION));  
 

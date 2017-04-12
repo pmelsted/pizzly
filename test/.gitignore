@@ -1,0 +1,5 @@
+kallisto_out
+pizzly_*
+*.kidx
+cache*
+.snakemake

@@ -3,7 +3,7 @@
 
 #include <string>
 
-#define PIZZLY_VERSION "0.37.0"
+#define PIZZLY_VERSION "0.37.1"
 
 struct ProgramOptions {
   std::string gtf;
@@ -15,7 +15,7 @@ struct ProgramOptions {
   int alignScore;
   int insertSize;
   int kmerScore;
-  ProgramOptions() : kmerScore(2) {}
+  ProgramOptions() : kmerScore(2), insertSize(400) {}
 };
 
 #endif // COMMON_H
