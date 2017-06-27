@@ -254,8 +254,8 @@ void parseFasta(Transcriptome &transcriptome, const std::string &fasta_fn) {
     seqan::readRecord(id,seq,seqFileIn);
     std::string name = std::string(seqan::toCString(id));
     size_t sp = name.find(' ');
-    size_t dot = name.find('.');
-    transcriptome.seqs.insert({name.substr(0,std::min(sp,dot)), std::move(seq)});
+    size_t pipe = name.find('|');
+    transcriptome.seqs.insert({name.substr(0,std::min(sp,pipe)), std::move(seq)});
   }  
 }
 
@@ -269,6 +269,7 @@ void parseGTF(Transcriptome &transcriptome, const std::string &gtf_fn) {
     seqan::readRecord(record,gtf);
     if (record.type == "gene") {
       GeneModel model;
+      std::string gene_version;
       for (int i = 0; i < length(record.tagNames); i++) {
         if (record.tagNames[i] == "gene_id") {
           model.id = seqan::toCString(record.tagValues[i]);
@@ -276,7 +277,7 @@ void parseGTF(Transcriptome &transcriptome, const std::string &gtf_fn) {
         if (record.tagNames[i] == "gene_name") {
           model.name = seqan::toCString(record.tagValues[i]);
         }
-        if (record.tagNames[i] == "gene_biotype") {
+        if (record.tagNames[i] == "gene_biotype" || record.tagNames[i] == "gene_type") {
           std::string val = std::string(seqan::toCString(record.tagValues[i]));
           //auto &val = record.tagValues[i];
           if (val == "protein_coding") {
@@ -287,7 +288,15 @@ void parseGTF(Transcriptome &transcriptome, const std::string &gtf_fn) {
             model.type = BioType::OTHER;
           }
         }
-
+        if (record.tagNames[i] == "gene_version") {
+          gene_version = std::string(seqan::toCString(record.tagValues[i]));
+        }
+      }
+      if (!gene_version.empty() && model.id.find('.') == std::string::npos) {        
+        model.id += "." + gene_version;
+      }
+      if (model.name.empty()) {
+        model.name = model.id;
       }
       model.chr = seqan::toCString(record.ref);
       model.start = record.beginPos;
@@ -302,25 +311,49 @@ void parseGTF(Transcriptome &transcriptome, const std::string &gtf_fn) {
       transcriptome.genes.insert({model.id,std::move(model)});
     } else if (record.type == "transcript") {
       TranscriptModel model;
-      std::string gene_id;
+      bool bioTypeSet = false;
+      model.type = BioType::OTHER; 
+      std::string gene_id, gene_version, txp_version;
       for (int i = 0; i < length(record.tagNames); i++) {
         if (record.tagNames[i] == "gene_id") {
           gene_id = seqan::toCString(record.tagValues[i]);
         } else if (record.tagNames[i] == "transcript_id") {
           model.id = seqan::toCString(record.tagValues[i]);
         }
-        if (record.tagNames[i] == "transcript_biotype") {
+        if (record.tagNames[i] == "transcript_biotype" || record.tagNames[i] == "transcript_type") {
           std::string val = std::string(seqan::toCString(record.tagValues[i]));
           //auto &val = record.tagValues[i];
           if (val == "protein_coding") {
             model.type = BioType::PROTEIN;
           } else if (val.find("pseudogene") != std::string::npos) {
             model.type = BioType::PSEUDO;
-          } else {
-            model.type = BioType::OTHER;
-          }
+          } 
+          bioTypeSet = true;
+        }   
+        if (record.tagNames[i] == "gene_version") {
+          gene_version = std::string(seqan::toCString(record.tagValues[i]));
+        } 
+        if (record.tagNames[i] == "transcript_version") {
+          txp_version = std::string(seqan::toCString(record.tagValues[i]));
+        }    
+      }
+      if (!gene_version.empty() && gene_id.find('.') == std::string::npos) {        
+        gene_id += "." + gene_version;
+      }
+      if (!txp_version.empty() && model.id.find('.') == std::string::npos) {        
+        model.id += "." + txp_version;
+      }
+      if (!bioTypeSet) {
+        std::string source = seqan::toCString(record.source);
+        // we need this for Ensembl versions 76 and below, 
+        // transcripts don't have transcript_[bio]type set but store this info in the source name ?!?
+        if (source == "protein_coding") {
+          model.type = BioType::PROTEIN;
+        } else if (source.find("pseudogene") != std::string::npos) {
+          model.type = BioType::PSEUDO;
         }
       }
+
       model.chr = seqan::toCString(record.ref);
       model.start = record.beginPos;
       model.stop = record.endPos;
@@ -341,12 +374,25 @@ void parseGTF(Transcriptome &transcriptome, const std::string &gtf_fn) {
       ExonModel model;
       std::string trx_id;
       std::string gene_id;
+      std::string txp_version, gene_version;
       for (int i = 0; i < length(record.tagNames); i++) {
          if (record.tagNames[i] == "gene_id") {
           gene_id = seqan::toCString(record.tagValues[i]);
         } else if (record.tagNames[i] == "transcript_id") {
           trx_id = seqan::toCString(record.tagValues[i]);
         }
+        if (record.tagNames[i] == "gene_version") {
+          gene_version = std::string(seqan::toCString(record.tagValues[i]));
+        } 
+        if (record.tagNames[i] == "transcript_version") {
+          txp_version = std::string(seqan::toCString(record.tagValues[i]));
+        }  
+      }
+      if (!gene_version.empty() && gene_id.find('.') == std::string::npos) {        
+        gene_id += "." + gene_version;
+      }
+      if (!txp_version.empty() && trx_id.find('.') == std::string::npos) {        
+        trx_id += "." + txp_version;
       }
       model.chr = seqan::toCString(record.ref);
       model.start = record.beginPos;

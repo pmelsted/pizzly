@@ -40,7 +40,7 @@ namespace std {
   };
 }
 
-static std::regex trslist_re("\\((\\w*)(\\.\\d+)?,(-?\\d+),(FW|RC)\\)");
+static std::regex trslist_re("\\(((\\w|\\.)+),(-?\\d+),(FW|RC)\\)");
 
 void parseTrList(const std::string &trlist, std::vector<TranscriptPos> &trpos) {
   //std::regex tr_entry("([[:alnum:]]+,-?[[:digit:]]+,[FW|RC]\)")
