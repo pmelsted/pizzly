@@ -11,11 +11,12 @@ struct ProgramOptions {
   std::string fusionFile;
   std::string fasta;
   std::string outprefix;
+  bool ignoreProtein;
   int k;
   int alignScore;
   int insertSize;
   int kmerScore;
-  ProgramOptions() : kmerScore(2), insertSize(400) {}
+  ProgramOptions() : kmerScore(2), insertSize(400), ignoreProtein(false) {}
 };
 
 #endif // COMMON_H

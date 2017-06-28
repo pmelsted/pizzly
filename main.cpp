@@ -38,6 +38,9 @@ parseCommandLine(ProgramOptions & options, int argc, char const ** argv) {
   seqan::addOption(parser, seqan::ArgParseOption(
       "F", "fasta", "Fasta reference",
       seqan::ArgParseArgument::STRING, "FASTA"));
+  seqan::addOption(parser, seqan::ArgParseOption(
+      "", "ignore-protein", "Ignore any protein coding information in annotation"));
+  
 
   seqan::setRequired(parser, "k");
   seqan::setRequired(parser, "o");
@@ -60,6 +63,9 @@ parseCommandLine(ProgramOptions & options, int argc, char const ** argv) {
   getOptionValue(options.cache, parser, "cache");
   getOptionValue(options.outprefix, parser, "output");
   getArgumentValue(options.fusionFile, parser, 0);
+  if (seqan::isSet(parser, "ignore-protein")) {
+      options.ignoreProtein = true;
+  }
 
 
   return seqan::ArgumentParser::PARSE_OK;
@@ -80,16 +86,16 @@ int main(int argc, char const ** argv)
     // parse GTF file
     Transcriptome trx;
     if (options.cache.empty()) {
-        parseGTF(trx, options.gtf);
+        parseGTF(trx, options.gtf, options);
     } else {
         std::ifstream in(options.cache);
         if (in.good()) {
             std::cerr << "Opening cached file ... ";
-            loadTranscriptome(trx,in);
+            loadTranscriptome(trx,in, options);
             std::cerr << "loaded " << trx.genes.size() << " genes and " << trx.trxToGeneId.size() << " transcripts" << std::endl;
             in.close();            
         } else {
-            parseGTF(trx, options.gtf);
+            parseGTF(trx, options.gtf, options);
             in.close();
             std::ofstream out(options.cache);
             writeTranscriptome(trx,out);
@@ -100,9 +106,33 @@ int main(int argc, char const ** argv)
 
     parseFasta(trx, options.fasta);
 
-    
+    int numTxpSeqFound = 0;
+    int numProt = 0;
+    for (const auto &it : trx.seqs) {
+        if (trx.trxToGeneId.find(it.first) != trx.trxToGeneId.end()) {
+            numTxpSeqFound++;
+        }
+    }
+    for (const auto &git : trx.genes) {
+        for (const auto &it : git.second.transcripts) {
+            if (it.second.type == BioType::PROTEIN) {
+                numProt++;
+            }
+        }
+    }
+    if (numTxpSeqFound == 0) {
+        std::cerr << "Error, could not find any transcript sequences check that the ids in the FASTA file and GTF file match" << std::endl;
+        exit(1); 
+    } else if (numTxpSeqFound != trx.seqs.size()) {
+        std::cerr << "Warning: could not find annotations for " << (trx.seqs.size() - numTxpSeqFound) << " transcripts\n" << std::endl;
+    }
 
-    std::cerr << "Read a total of " << trx.seqs.size() << " transcripts" << std::endl;
+    if (!options.ignoreProtein && numProt == 0) {
+        std::cerr << "Warning: the annotation contains no protein coding information\n"
+                  << "         pizzly will probably not report any fusions, consider finding\n"
+                  << "         a better annotation or run again with --ignore-protein option.\n" << std::endl;  
+    }
+
 
     // filter fusion edges
     processFusions(trx,options);

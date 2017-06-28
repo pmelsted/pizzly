@@ -195,7 +195,7 @@ void writeTranscriptome(Transcriptome &transcriptome, std::ostream &out) {
   }
 }
 
-void loadTranscriptome(Transcriptome& transcriptome, std::istream &in) {
+void loadTranscriptome(Transcriptome& transcriptome, std::istream &in, const ProgramOptions& options) {
   std::string line;
   std::string segment;
   std::string type;
@@ -209,7 +209,11 @@ void loadTranscriptome(Transcriptome& transcriptome, std::istream &in) {
       in >> gene_id>> model.name >> model.chr >> gtype >> strand >> model.start >> model.stop;
       model.id = gene_id;
       model.strand = charToStrand(strand);
-      model.type = stringToType(gtype);
+      if (options.ignoreProtein) {
+        model.type = BioType::PROTEIN;
+      } else {
+        model.type = stringToType(gtype);
+      }
       in >> line; // rest of transcripts, ignore for now
       transcriptome.genes.insert({gene_id, std::move(model)});
     } else if (type == "TRANSCRIPT") {
@@ -218,7 +222,11 @@ void loadTranscriptome(Transcriptome& transcriptome, std::istream &in) {
       in >> tr_id >> gene_id >> model.chr >> ttype >> strand >> model.start >> model.stop;
       model.id = tr_id;
       model.strand = charToStrand(strand);
-      model.type = stringToType(ttype);
+      if (options.ignoreProtein) {
+        model.type = BioType::PROTEIN;
+      } else {
+        model.type = stringToType(ttype);
+      }
       in >> line;
       std::stringstream strline(line);
       while (std::getline(strline, segment, ';')) {
@@ -259,7 +267,7 @@ void parseFasta(Transcriptome &transcriptome, const std::string &fasta_fn) {
   }  
 }
 
-void parseGTF(Transcriptome &transcriptome, const std::string &gtf_fn) {
+void parseGTF(Transcriptome &transcriptome, const std::string &gtf_fn, const ProgramOptions& options) {
   seqan::GffFileIn gtf(gtf_fn.c_str());
   seqan::GffRecord record;
 
@@ -297,6 +305,9 @@ void parseGTF(Transcriptome &transcriptome, const std::string &gtf_fn) {
       }
       if (model.name.empty()) {
         model.name = model.id;
+      }
+      if (options.ignoreProtein) {
+        model.type = BioType::PROTEIN;
       }
       model.chr = seqan::toCString(record.ref);
       model.start = record.beginPos;
@@ -353,7 +364,9 @@ void parseGTF(Transcriptome &transcriptome, const std::string &gtf_fn) {
           model.type = BioType::PSEUDO;
         }
       }
-
+      if (options.ignoreProtein) {
+        model.type = BioType::PROTEIN;
+      }
       model.chr = seqan::toCString(record.ref);
       model.start = record.beginPos;
       model.stop = record.endPos;
@@ -412,13 +425,13 @@ void parseGTF(Transcriptome &transcriptome, const std::string &gtf_fn) {
       t_it->second.exons.push_back(std::move(model));
     }
   }
-  std::cerr << "Found " << transcriptome.genes.size() << " genes out of " << n << " records" << std::endl;
+  std::cerr << "GTF file contains " << transcriptome.genes.size() << " genes and " << transcriptome.trxToGeneId.size() << " transcripts" << std::endl;
 
-  for (auto it : transcriptome.genes) {
+  /*  for (auto it : transcriptome.genes) {
     const auto &gene = it.second;
     //std::cout << "Gene = " << gene.id << ", name = " << gene.name << ", pos = " << gene.chr << ":" << (gene.start+1) << "-" << gene.stop << std::endl;
     
-  }
+  }*/
 }
 
 

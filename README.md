@@ -31,15 +31,15 @@ make install
 Pizzly requires the reference transcriptome in FASTA format as well as a GTF file describing the transcriptome.
 We recommend using the [Ensembl](http://www.ensembl.org/index.html) transcriptomes.
 
-The example below assumes you have your transcriptome in FASTA format as `index.fa.gz`, the GTF file `index.gtf.gz` 
-and your paired-end RNA-Seq data sets in `r1.fastq.g` and `r2.fastq.gz`
+The example below assumes you have your transcriptome in FASTA format as `transcripts.fa.gz`, the GTF file `transcripts.gtf.gz` 
+and your paired-end RNA-Seq data sets in `r1.fastq.gz` and `r2.fastq.gz`
 
 ### Running
 
 First we create the kallisto index
 
 ```
-kallisto index -i index.idx -k 31 index.fa.gz
+kallisto index -i index.idx -k 31 transcripts.fa.gz
 ```
 
 Next we quantify using kallisto with fusion detection enabled
@@ -51,19 +51,34 @@ kallisto quant -i index.idx --fusion -o output r1.fastq.gz r2.fastq.gz
 This creates the file `output/fusion.txt` which is used by pizzly, finally we run pizzly
 
 ```
-pizzly -k 31 --gtf index.gtf --cache index.cache.txt --align-score 2 \
-        --insert-size 250 --fasta index.fa.gz --output test output/fusion.txt
+pizzly -k 31 --gtf transcripts.gtf --cache index.cache.txt --align-score 2 \
+        --insert-size 250 --fasta transcripts.fa.gz --output test output/fusion.txt
 ```
 
 The parameters to set are 
 
 * `--insert-size`, which should be the maximum insert size of the paired-end library (kallisto will estimate this from the reads)
 * `--align-score`, the number of mismatches allowed when aligning reads to a reference transcript
+* `--ignore-protein`, ignore any information about protein coding in the annotation, **warning** this will probably lead to an increase in the number of false positives reported.
+
 
 
 ### Output
 
 The `--output test` parameter is used as a prefix and two files are created `test.fusions.fasta` and `test.json`
+
+
+### Annotations
+
+pizzly has been tested on [Ensembl](http://www.ensembl.org/) (versions 75+) and [Gencode](http://www.gencodegenes.org/) (version 19+) annotations. We recommend using the latest Ensembl annotations (version 87 [GTF](ftp://ftp.ensembl.org/pub/release-89/gtf/homo_sapiens/), [FASTA](ftp://ftp.ensembl.org/pub/release-89/fasta/homo_sapiens/cdna/)) for running with pizzly.
+
+Note that for gencode you will need to modify the FASTA file to remove pipe symbols (`|`) from the target names. The following should work (use `gzcat` on macosx)
+
+```
+zcat gencode.v26.transcripts.fa.gz  | tr '|' ' ' | gzip -1 >  gencode.v26.transcripts.fixed.fa.gz
+```
+
+The FASTA file used must be the same one that was used to build the kallisto index.
 
 
 ### License
