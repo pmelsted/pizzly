@@ -858,6 +858,8 @@ void processFusions(const Transcriptome &trx, ProgramOptions& options) {
             hasAnyTr = true;
           };
 
+          std::unordered_set<std::string> fnames;
+
           bool firstJsonCommaTrans = true;
           SplitInfoMap snappedSplits = snapToJunction(splits, 4);      
           for (auto & spp : snappedSplits) {
@@ -865,8 +867,8 @@ void processFusions(const Transcriptome &trx, ProgramOptions& options) {
             int split_reads = spp.second;
             int ed1 = mapToClosestExon(sp.tr1,sp.pos1, sp.strand1);
             int ed2 = mapToClosestExon(sp.tr2,sp.pos2, sp.strand2);
-            int tp1 = sp.pos1 + ed1;
-            int tp2 = sp.pos2 + ed2;
+            int tp1 = sp.pos1 - ed1;
+            int tp2 = sp.pos2 - ed2;
             const auto & seq1 = trx.seqs.find(sp.tr1)->second;
             const auto & seq2 = trx.seqs.find(sp.tr2)->second;
             
@@ -890,6 +892,11 @@ void processFusions(const Transcriptome &trx, ProgramOptions& options) {
                 writeGeneInfoToJsonStream(false);
                 
                 std::string fasta_name = sp.tr1 + "_0:" + std::to_string(tp1) + "_" + sp.tr2 + "_" + std::to_string(tp2) + ":" + std::to_string(seqan::length(seq2));
+                if (fnames.count(fasta_name) > 0) {
+                  continue;
+                } else {
+                  fnames.insert(fasta_name);
+                }
                
                 if (!firstJsonCommaTrans) {
                   jsonOut << ",\n";
@@ -991,7 +998,7 @@ void processFusions(const Transcriptome &trx, ProgramOptions& options) {
                         spi.tr2 = t2.tr;
                         spi.pos2 = tp2;
                         spi.dir2 = false;
-                        spi.strand2 = Strandedness::REVERSE;
+                        spi.strand2 = Strandedness::FORWARD;
                       } else {
                         spi.tr1 = t2.tr;
                         spi.pos1 = tp2;
@@ -1000,7 +1007,7 @@ void processFusions(const Transcriptome &trx, ProgramOptions& options) {
                         spi.tr2 = t1.tr;
                         spi.pos2 = tp1;
                         spi.dir2 = false;
-                        spi.strand2 = Strandedness::REVERSE;                      
+                        spi.strand2 = Strandedness::FORWARD;
                       }
 
                       trfmap[spi].push_back({i,insLen});
@@ -1048,10 +1055,10 @@ void processFusions(const Transcriptome &trx, ProgramOptions& options) {
                 jsonOut << "        {\n          \"fasta_record\": \"" << fasta_name << "\",\n"
                         <<            "          \"transcriptA\": {\"id\" : \"" << spi.tr1 << "\", \"startPos\" : " << std::to_string((spi.dir1) ? 0 : spi.pos1)
                         << ", \"endPos\" : " << std::to_string((spi.dir1) ? spi.pos1 : seqan::length(seq1))
-                        << ", \"strand\" : " << ((spi.dir1) ? "true" : "false") << "},\n";
+                        << ", \"strand\" : " << ((spi.strand1 == Strandedness::FORWARD) ? "true" : "false") << "},\n";
                 jsonOut <<           "          \"transcriptB\": {\"id\" : \"" << spi.tr2 << "\", \"startPos\" : " << std::to_string((spi.dir2) ? 0 : spi.pos2)
                         << ", \"endPos\" : " << std::to_string((spi.dir2) ? spi.pos2 : seqan::length(seq2))
-                        << ", \"strand\" : " << ((spi.dir2) ? "true" : "false") << "},\n"
+                        << ", \"strand\" : " << ((spi.strand2 == Strandedness::FORWARD) ? "true" : "false") << "},\n"
                         << "          \"support\" : " << std::to_string(t_count) << ",\n"
                         << "          \"reads\" : [";
               

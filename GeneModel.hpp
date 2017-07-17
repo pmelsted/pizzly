@@ -263,6 +263,7 @@ void parseFasta(Transcriptome &transcriptome, const std::string &fasta_fn) {
     std::string name = std::string(seqan::toCString(id));
     size_t sp = name.find(' ');
     size_t pipe = name.find('|');
+    seqan::toUpper(seq);
     transcriptome.seqs.insert({name.substr(0,std::min(sp,pipe)), std::move(seq)});
   }  
 }
