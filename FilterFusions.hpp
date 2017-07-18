@@ -889,7 +889,20 @@ void processFusions(const Transcriptome &trx, ProgramOptions& options) {
               }
               
               if (!filter || ((t_count >= 1) && std::abs(ed1) <= 10 && std::abs(ed2) <= 10)) {
-                writeGeneInfoToJsonStream(false);
+                bool swap = false;
+                auto tg1 = trx.trxToGeneId.find(sp.tr1);
+                auto tg2 = trx.trxToGeneId.find(sp.tr2);
+                assert(tg1 != trx.trxToGeneId.end());
+                assert(tg2 != trx.trxToGeneId.end());
+                if (g1 != tg1->second) {
+                  swap = true;
+                  assert(g1 == tg2->second);
+                  assert(g2 == tg1->second);
+                } else {
+                  assert(g1 == tg1->second);
+                  assert(g2 == tg2->second);
+                }
+                writeGeneInfoToJsonStream(swap);
                 
                 std::string fasta_name = sp.tr1 + "_0:" + std::to_string(tp1) + "_" + sp.tr2 + "_" + std::to_string(tp2) + ":" + std::to_string(seqan::length(seq2));
                 if (fnames.count(fasta_name) > 0) {
@@ -1042,7 +1055,20 @@ void processFusions(const Transcriptome &trx, ProgramOptions& options) {
               }
 
               if (!filter || (t_count >= 2)) {
-                writeGeneInfoToJsonStream(false);
+                bool swap = false;
+                auto tg1 = trx.trxToGeneId.find(spi.tr1);
+                auto tg2 = trx.trxToGeneId.find(spi.tr2);
+                assert(tg1 != trx.trxToGeneId.end());
+                assert(tg2 != trx.trxToGeneId.end());
+                if (g1 != tg1->second) {
+                  swap = true;
+                  assert(g1 == tg2->second);
+                  assert(g2 == tg1->second);
+                } else {
+                  assert(g1 == tg1->second);
+                  assert(g2 == tg2->second);
+                }
+                writeGeneInfoToJsonStream(swap);
 
                 if (!firstJsonCommaTrans) {
                   jsonOut << ",\n";
