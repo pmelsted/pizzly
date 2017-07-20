@@ -3,7 +3,7 @@
 
 #include <string>
 
-#define PIZZLY_VERSION "0.37.2"
+#define PIZZLY_VERSION "0.37.3"
 
 struct ProgramOptions {
   std::string gtf;

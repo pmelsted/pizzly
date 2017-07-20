@@ -71,6 +71,12 @@ A more sophisticated example is in the `test` directory which contains a `snakem
 
 The `--output test` parameter is used as a prefix and two files are created `test.fusions.fasta` and `test.json`, this contains the filtered fusion calls. For unfiltered fusion calls, use the corresponding `.unfiltered` files.
 
+### Scripts
+
+The `scripts` subfolder contains useful Python scripts
+
+- `get_fragment_length.py` examines an `abundance.h5` produced by `kallisto` and finds the 95th percentile of the fragment length distribution
+- `flatten_json.py` reads the `.json` output and converts to a simple gene table
 
 ### Annotations
 
