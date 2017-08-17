@@ -12,7 +12,7 @@ def get_cumulative_dist(fn):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python get_fragment_length.py H5FILE [cutoff]")
+        print("Usage: python pizzly_get_fragment_length.py H5FILE [cutoff]")
         print("")
         print("Prints 95 percentile fragment length")
         print("")

@@ -1,14 +1,14 @@
 ![pizzly](logo.jpg)
 
-# pizzly 
+# pizzly
 
 Fast fusion detection using kallisto
 
 ### About
 
-pizzly is a program for detecting gene fusions from RNA-Seq data of cancer samples. 
+pizzly is a program for detecting gene fusions from RNA-Seq data of cancer samples.
 It requires running [kallisto](https://pachterlab.github.io/kallisto) with the `--fusion`
-parameter (available in version `0.43.1` or later). 
+parameter (available in version `0.43.1` or later).
 
 ### Building
 
@@ -31,7 +31,7 @@ make install
 Pizzly requires the reference transcriptome in FASTA format as well as a GTF file describing the transcriptome.
 We recommend using the [Ensembl](http://www.ensembl.org/index.html) transcriptomes.
 
-The example below assumes you have your transcriptome in FASTA format as `transcripts.fa.gz`, the GTF file `transcripts.gtf.gz` 
+The example below assumes you have your transcriptome in FASTA format as `transcripts.fa.gz`, the GTF file `transcripts.gtf.gz`
 and your paired-end RNA-Seq data sets in `r1.fastq.gz` and `r2.fastq.gz`
 
 ### Running
@@ -48,19 +48,34 @@ Next we quantify using kallisto with fusion detection enabled
 kallisto quant -i index.idx --fusion -o output r1.fastq.gz r2.fastq.gz
 ```
 
-This creates the file `output/fusion.txt` which is used by pizzly, finally we run pizzly
+This creates the file `output/fusion.txt` which is used by pizzly. Next, we
+get the insert size
+
+```
+pizzly_get_fragment_length.py output/abundance.h5
+400
+```
+
+Finally we run pizzly
 
 ```
 pizzly -k 31 --gtf transcripts.gtf --cache index.cache.txt --align-score 2 \
         --insert-size 400 --fasta transcripts.fa.gz --output test output/fusion.txt
 ```
 
-The parameters to set are 
+Optionally, pizzly transcript-level fusion calls can be collapsed down to gene
+level fusion calls by using the `pizzly_flatten_json.py` script
+
+```
+pizzly_flatten_json.py test.json > test-fusion-genes.tsv
+```
+
+The parameters to set are
 
 * `--insert-size`, which should be the maximum insert size of the paired-end library (kallisto will estimate this from the reads, default used is 400)
 * `--align-score`, the number of mismatches allowed when aligning reads to a reference transcript (default used is 2)
 `--ignore-protein`, ignore any information about protein coding in the annotation, **warning** this will probably lead to an increase in the number of false positives reported.
-* `--cache`, if this file does not exist, pizzly will parse the GTF (which can take up to a minute or two) and store the required data in the cached file. If the cache file exists (if you've run pizzly previously on the same GTF file), pizzly will parse this file instead, which is much faster than parsing the GTF. 
+* `--cache`, if this file does not exist, pizzly will parse the GTF (which can take up to a minute or two) and store the required data in the cached file. If the cache file exists (if you've run pizzly previously on the same GTF file), pizzly will parse this file instead, which is much faster than parsing the GTF.
 
 
 A more sophisticated example is in the `test` directory which contains a `snakemake` workflow to index, quantify, call fusions and requantify using `kallisto` and `pizzly`.
@@ -75,8 +90,8 @@ The `--output test` parameter is used as a prefix and two files are created `tes
 
 The `scripts` subfolder contains useful Python scripts
 
-- `get_fragment_length.py` examines an `abundance.h5` produced by `kallisto` and finds the 95th percentile of the fragment length distribution
-- `flatten_json.py` reads the `.json` output and converts to a simple gene table
+- `pizzly_get_fragment_length.py` examines an `abundance.h5` produced by `kallisto` and finds the 95th percentile of the fragment length distribution
+- `pizzly_flatten_json.py` reads the `.json` output and converts to a simple gene table
 
 ### Annotations
 
