@@ -28,5 +28,5 @@ if __name__ == "__main__":
         else:
             cutoff = 0.95
         y = get_cumulative_dist(fn)
-        fraglen = np.argmax(y > .95)
+        fraglen = np.argmax(y > cutoff)
         print(fraglen)
