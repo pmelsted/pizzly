@@ -5,8 +5,8 @@ import sys
 
 
 def get_cumulative_dist(fn):
-    f = h5py.File(fn)
-    x = np.asarray(f['aux']['fld'], dtype='float64')
+    with h5py.File(fn) as f:
+        x = np.asarray(f['aux']['fld'], dtype='float64')
     y = np.cumsum(x)/np.sum(x)
     f.close()
     return y
