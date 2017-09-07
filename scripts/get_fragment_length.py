@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 import h5py
 import numpy as np
 import sys
@@ -20,7 +22,7 @@ if __name__ == "__main__":
         print("       cutoff:      percentage cutoff to use (default .95)")
     else:
         fn = sys.argv[1]
-        if len(sys.argv) >=3:
+        if len(sys.argv) >= 3:
             cutoff = float(sys.argv[2])
             if cutoff <= 0 or cutoff >= 1.0:
                 cutoff = 0.95
