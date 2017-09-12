@@ -26,6 +26,14 @@ make
 make install
 ```
 
+## Installing
+
+pizzly can be installed via the [Conda package manager](https://conda.io) from the [Bioconda channel](https://bioconda.github.io/).
+
+```bash
+conda create pizzly --name pizzly -c bioconda
+```
+
 ### Ingredients
 
 Pizzly requires the reference transcriptome in FASTA format as well as a GTF file describing the transcriptome.
@@ -93,4 +101,4 @@ The FASTA file used must be the same one that was used to build the kallisto ind
 
 ### License
 
-GPL v3.0
+BSD-2
