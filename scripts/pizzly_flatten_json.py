@@ -1,3 +1,4 @@
+#!/usr/bin/env python -Es
 import sys
 import json
 from collections import OrderedDict
@@ -26,7 +27,7 @@ def outputGeneTable(fusions, outf, filters = None):
         outf.write('\n')
 
 def usage():
-    print("Usage: python flatten_json.py fusion.out.json [genetable.txt]")
+    print("Usage: python pizzly_flatten_json.py fusion.out.json [genetable.txt]")
     print("")
     print("       outputs a flat table listing all gene fusions, if the output file is not")
     print("       specified it prints to standard output")

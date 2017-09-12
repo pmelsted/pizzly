@@ -1,18 +1,19 @@
+#!/usr/bin/env python -Es
 import h5py
 import numpy as np
 import sys
 
 
 def get_cumulative_dist(fn):
-    f = h5py.File(fn)
-    x = np.asarray(f['aux']['fld'], dtype='float64')
+    with h5py.File(fn) as f:
+        x = np.asarray(f['aux']['fld'], dtype='float64')
     y = np.cumsum(x)/np.sum(x)
     f.close()
     return y
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python get_fragment_length.py H5FILE [cutoff]")
+        print("Usage: python pizzly_get_fragment_length.py H5FILE [cutoff]")
         print("")
         print("Prints 95 percentile fragment length")
         print("")
@@ -27,5 +28,5 @@ if __name__ == "__main__":
         else:
             cutoff = 0.95
         y = get_cumulative_dist(fn)
-        fraglen = np.argmax(y > .95)
+        fraglen = np.argmax(y > cutoff)
         print(fraglen)
