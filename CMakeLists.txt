@@ -30,3 +30,5 @@ set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}" )
 # Add executable and link against SeqAn dependencies.
 add_executable (pizzly main.cpp)
 target_link_libraries (pizzly pthread ${ZLIB_LIBRARIES} )
+
+install(TARGETS pizzly DESTINATION bin)
