@@ -28,6 +28,9 @@ struct TranscriptPos {
 };
 
 typedef std::unordered_map<std::string, std::unordered_map<std::string,std::vector<int>>> GeneGraph;
+typedef seqan::CharString TSeq;
+
+
 
 
 
@@ -107,6 +110,9 @@ struct SplitInfo {
   }
 };
 
+using SplitInfoMap = std::unordered_map<SplitInfo, int>;
+using FusionVector = std::vector<std::pair<FusionRecord, SplitRecord>>;
+
 namespace std {
   template<> struct hash< SplitInfo> {
       std::size_t operator()(const SplitInfo &t) const {        
@@ -147,29 +153,252 @@ std::istream& operator>>(std::istream& stream, FusionRecord &rec)
   return stream;
 }
 
+
+bool get_gene_set(const std::vector<TranscriptPos> &trlist, std::unordered_set<std::string> &gene_list, const Transcriptome &trx) {
+  for (auto &tr : trlist) {
+    auto it = trx.trxToGeneId.find(tr.tr);
+    if (it != trx.trxToGeneId.end()) {      
+      auto git = trx.genes.find(it->second)->second;
+      if (git.chr == "chrM" || git.chr == "M" || git.chr == "MT") {
+        return true; // discard anything from the mitochondria, TODO: exclude unplaced regions
+      }
+      gene_list.insert(it->second);
+    }    
+  }
+  return false;
+}
+
+ExonModel&& find_gene_range(const std::unordered_set<std::string> glist, const Transcriptome& trx, int limit = 1000) {
+  ExonModel m;
+  m.start = std::numeric_limits<int>::max();
+  m.stop = -1;
+
+  for (auto &g : glist) {
+    // check if first
+    const GeneModel &gene = trx.genes.find(g)->second;
+    if (gene.type != BioType::PROTEIN) {
+      continue; // strict type checking
+    }
+    if (m.stop < 0) {
+      m.chr = gene.chr;
+      m.start = gene.start;
+      m.stop = gene.stop;
+    } else {
+      if (m.chr != gene.chr) {
+        m.stop = -1; m.start =0;
+        return std::move(m);
+      }
+      int dist = interval_dist(m.start,m.stop, gene.start, gene.stop);
+      if (dist <= limit) {
+        m.start = std::min(m.start,gene.start);
+        m.stop = std::max(m.stop, gene.stop);
+      }
+    } 
+  }
+  return std::move(m);
+}
+
+
+bool mapKmersWithErrors(TSeq& krseq, const std::vector<TranscriptPos> &trlist, const Transcriptome& trx, int k, int kmerScore) {
+  typedef seqan::Index<seqan::StringSet<TSeq>, seqan::IndexQGram<seqan::Shape<seqan::Dna, seqan::UngappedShape<8> >, seqan::OpenAddressing> > TIndex;
+  typedef seqan::Pattern<TIndex, seqan::Swift<seqan::SwiftSemiGlobal> > TPattern;
+  typedef seqan::Finder<const TSeq, seqan::Swift<seqan::SwiftSemiGlobal> > TFinder;
+  seqan::StringSet<TSeq> reads;
+  appendValue(reads,krseq);
+  seqan::reverseComplement(krseq);
+  appendValue(reads,krseq);
+  TIndex index(reads);
+  TPattern pattern(index);
+  int matchlen = seqan::length(krseq);
+
+  double epsilon = std::min(((double) kmerScore) / k,0.1);
+
+  for (auto &tr : trlist) {
+    const auto &it = trx.seqs.find(tr.tr);
+    if (it != trx.seqs.end()) {      
+      const TSeq &trseq = it->second;
+      TFinder finder(trseq);
+      while (find(finder, pattern, epsilon, k)) {
+        seqan::Finder<const TSeq> verifyFinder(trseq);
+        seqan::setPosition(verifyFinder, seqan::beginPosition(finder));
+        seqan::Pattern<const TSeq, seqan::Myers<>> verifyPattern(reads[seqan::position(pattern).i1]);
+        while (seqan::find(verifyFinder, verifyPattern, -((int) (epsilon*k))) 
+            && seqan::position(verifyFinder) < seqan::endPosition(seqan::infix(finder))) {
+          //std::cout << seqan::infix(finder)  << " -- " << tr.tr << std::endl;
+          //std::cout << reads[seqan::position(pattern).i1] << " -- " << rec.n1 << ((rec.type == FusionRecord::PAIR) ? " PAIR" : " SPLIT") << std::endl;
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+std::unordered_map<std::string, std::vector<TranscriptPos>> getSequencesFromTrs(const std::vector<TranscriptPos> &trs, int length, const Transcriptome &trx, bool orient = true) {
+  std::unordered_map<std::string, std::vector<TranscriptPos>> tlist;
+  for (const TranscriptPos &trpos : trs) {
+    auto git = trx.trxToGeneId.find(trpos.tr);
+    if (git == trx.trxToGeneId.end()) {
+      continue;
+    }
+    auto gene_id = git->second; //TODO refactor this out
+    auto &genemodel = trx.genes.find(gene_id)->second;
+    auto &trmodel = genemodel.transcripts.find(trpos.tr)->second;
+    if (trmodel.type != BioType::PROTEIN) {
+      continue; // modify
+    }
+    const auto& trseq = trx.seqs.find(trmodel.id)->second;
+    int pos = trpos.pos-1; // 1-based like SAM
+    int tr_start = (trpos.strand == Strandedness::FORWARD) ? pos : pos - length+1;
+    int tr_stop = (trpos.strand == Strandedness::FORWARD) ? pos + length : pos+1; // off by one?
+
+    // discard off bounds things
+    if (tr_start < 0) {
+      tr_start = 0;
+    }
+
+    if (tr_stop > seqan::length(trseq)) {
+      tr_stop = seqan::length(trseq);
+    }
+
+    auto read_match = seqan::CharString(seqan::infix(trseq, tr_start, tr_stop));
+    if ((trpos.strand == Strandedness::REVERSE) == orient) {
+      seqan::reverseComplement(read_match);
+    }
+
+    std::string tseq(seqan::toCString(read_match));
+    tlist[tseq].push_back(trpos);
+  }
+  return std::move(tlist);
+}
+
+void mapReadsToTranscriptPos(const std::string &seq, const std::vector<TranscriptPos> &trs, std::vector<TranscriptPos> &out_tr, const Transcriptome& trx, int alignScore) {
+  std::unordered_map<std::string, std::vector<TranscriptPos>> tlist;
+  int readlen = seq.size();
+  tlist = getSequencesFromTrs(trs, readlen, trx);
+
+  for (auto &it : tlist) {
+    auto& tseq = it.first;
+    auto& tposv = it.second;
+
+    seqan::CharString read(seq.c_str());
+    seqan::CharString ref(tseq.c_str()); // inefficient, refactor at some point
+
+    int ascore = seqan::globalAlignmentScore(read, ref, seqan::MyersBitVector());
+    if ( ascore >= -alignScore) {
+      out_tr.insert(out_tr.end(), tposv.begin(), tposv.end());
+      // debugging std::cout <<
+      /*
+      typedef seqan::Align<seqan::CharString, seqan::ArrayGaps> TAlign;
+      TAlign align;
+      seqan::resize(seqan::rows(align), 2);
+      seqan::assignSource(seqan::row(align, 0), read);
+      seqan::assignSource(seqan::row(align, 1), ref); 
+      int score = seqan::globalAlignment(align, seqan::Score<int, seqan::Simple>(0, -1, -1));
+      std::cout << "Score: " << score << std::endl;
+      std::cout << align + std::endl;
+      */
+    }
+
+  }
+}
+
+bool allSameStrand(const std::vector<TranscriptPos> trp, Strandedness& s) {
+  if (trp.empty()) {
+    return false;
+  }
+  s = trp[0].strand;    
+  for (const auto &tp : trp) {
+    if (tp.strand != s) {
+      return false;
+    }
+  }
+  return true;
+}
+
+ void splitAlignReads(const std::string &seq, const std::vector<TranscriptPos> &trsplit, const std::vector<TranscriptPos> &trsafe, std::vector<std::pair<TranscriptPos, TranscriptPos>> &out, int& splitPos, const Transcriptome& trx, int alignScore, int insertSize) {
+  // 
+  splitPos = -1;
+  std::unordered_map<std::string, std::vector<TranscriptPos>> trsplitlist, trsafelist;
+  int readlen = seq.size();
+  int fraglen = insertSize;
+  if (fraglen < 2*readlen) {
+    fraglen = 2*readlen;
+  }
+  trsplitlist = getSequencesFromTrs(trsplit, readlen, trx);
+  trsafelist = getSequencesFromTrs(trsafe, fraglen, trx, false); // use false here?
+
+  for (auto &tsplit : trsplitlist) {      
+    for (auto &tsafe : trsafelist) {
+
+      Strandedness splitStrand, safeStrand;
+      bool allSameSplit = allSameStrand(tsplit.second, splitStrand);
+      bool allSameSafe = allSameStrand(tsafe.second, safeStrand);
+
+      if (!allSameSafe || !allSameSplit) {          
+        //std::cout << "not all same direction " + std::endl;
+        continue; // weird mapping, fix later
+      }
+      if (splitStrand == safeStrand) {
+        //std::cout << "not same strand " + std::endl;
+        continue; // weird potential fusion, TODO look into this
+      }
+      bool forwardRead = (splitStrand == Strandedness::FORWARD);
+      // see if we can align across the sequences        
+      seqan::CharString read(seq.c_str());
+      seqan::CharString splitref(tsplit.first.c_str()); // inefficient, refactor at some point
+      seqan::CharString saferef(tsafe.first.c_str());
+
+      seqan::Gaps<seqan::CharString> readRowLeft, readRowRight, splitRowLeft, safeRowRight;
+      seqan::setSource(readRowLeft, read);
+      seqan::setSource(readRowRight, read);
+      seqan::setSource(splitRowLeft, splitref);
+      seqan::setSource(safeRowRight, saferef);
+
+      seqan::Score<int, seqan::Simple> scoringScheme(0,-1,-1);
+      seqan::AlignConfig<false, true, true, false> config;
+      int splitScore = seqan::splitAlignment(readRowLeft, splitRowLeft, readRowRight, safeRowRight, scoringScheme, config);
+      // debug
+      /*
+      std::cout << std::endl + "Score : " + splitScore + std::endl; 
+      std::cout << "splitRowLEFT: " + splitRowLeft + std::endl;
+      std::cout << "READLEFT    : " + readRowLeft + std::endl;
+      std::cout << "safeRowRight: " + safeRowRight + std::endl;
+      std::cout << "READRIGHT   : " + readRowRight + std::endl;
+      */
+      if (splitScore >= -alignScore) {
+        if (splitPos < 0) {
+          splitPos = seqan::toSourcePosition(readRowLeft, seqan::clippedEndPosition(readRowLeft));
+        }
+        for (const auto& t1 : tsplit.second) {
+          for (const auto& t2 : tsafe.second) {
+            TranscriptPos t2copy;
+            t2copy.tr = t2.tr;
+            t2copy.strand = (t2.strand == Strandedness::FORWARD) ? Strandedness::REVERSE : Strandedness::FORWARD; 
+            int t2pos = seqan::toSourcePosition(safeRowRight, 0);
+            int t2clip= seqan::toSourcePosition(readRowRight, 0); //seqan::clippedBeginPosition(readRowRight));
+            if (forwardRead) {
+              t2copy.pos = t2.pos - seqan::length(saferef) + t2pos + (seqan::length(splitref) - t2clip);
+            } else {
+              t2copy.pos = t2.pos + seqan::length(saferef) - t2pos -1;
+            }
+            out.push_back({t1, t2copy});
+          }
+        }
+      }
+    }
+  }    
+}
+
 // returns true if the record should be filtered
 bool filterFusionRecord(const Transcriptome &trx, ProgramOptions& options, const FusionRecord& rec, SplitRecord &splitrec) {
 
   std::unordered_set<std::string> g1,g2;
 
-  auto get_gene_set = [&](const std::vector<TranscriptPos> &trlist, std::unordered_set<std::string> &gene_list) {
-    for (auto &tr : trlist) {
-      auto it = trx.trxToGeneId.find(tr.tr);
-      if (it != trx.trxToGeneId.end()) {      
-        auto git = trx.genes.find(it->second)->second;
-        if (git.chr == "chrM" || git.chr == "M" || git.chr == "MT") {
-          return true; // discard anything from the mitochondria, TODO: exclude unplaced regions
-        }
-        gene_list.insert(it->second);
-      }    
-    }
-    return false;
-  };
-
-  if (get_gene_set(rec.tr1, g1)) {
+  if (get_gene_set(rec.tr1, g1, trx)) {
     return true;
   }
-  if (get_gene_set(rec.tr2, g2)) {
+  if (get_gene_set(rec.tr2, g2, trx)) {
     return true;
   }
   
@@ -179,43 +408,9 @@ bool filterFusionRecord(const Transcriptome &trx, ProgramOptions& options, const
     }
   }
 
-
   
-  auto find_gene_range = [&](const std::unordered_set<std::string> glist) -> ExonModel {
-    int limit = 1000;
-    ExonModel m;
-    m.start = std::numeric_limits<int>::max();
-    m.stop = -1;
-    
-
-
-    for (auto &g : glist) {
-      // check if first
-      const GeneModel &gene = trx.genes.find(g)->second;
-      if (gene.type != BioType::PROTEIN) {
-        continue; // strict type checking
-      }
-      if (m.stop < 0) {
-        m.chr = gene.chr;
-        m.start = gene.start;
-        m.stop = gene.stop;
-      } else {
-        if (m.chr != gene.chr) {
-          m.stop = -1; m.start =0;
-          return std::move(m);
-        }
-        int dist = interval_dist(m.start,m.stop, gene.start, gene.stop);
-        if (dist <= limit) {
-          m.start = std::min(m.start,gene.start);
-          m.stop = std::max(m.stop, gene.stop);
-        }
-      } 
-    }
-    return std::move(m);
-  };
-  
-  auto i1 = find_gene_range(g1);
-  auto i2 = find_gene_range(g2);
+  auto i1 = find_gene_range(g1, trx);
+  auto i2 = find_gene_range(g2, trx);
 
   if (i1.stop < 0 || i2.stop < 0) {
     return true;
@@ -230,54 +425,19 @@ bool filterFusionRecord(const Transcriptome &trx, ProgramOptions& options, const
 
   
   // see if the k-mer matching region of read 1 matches any of the transcripts of read 2
-  typedef seqan::CharString TSeq;
+  
   TSeq rs1(rec.seq1.substr(rec.kpos1.first, options.k + rec.kpos1.second-rec.kpos1.first).c_str());
   TSeq rs2(rec.seq2.substr(rec.kpos2.first, options.k + rec.kpos2.second-rec.kpos2.first).c_str());
   
 
   seqan::Align<TSeq, seqan::ArrayGaps> align;
   seqan::resize(rows(align), 2);
-
-  auto mapKmersWithErrors = [&](TSeq& krseq, const std::vector<TranscriptPos> &trlist) -> bool {
-    typedef seqan::Index<seqan::StringSet<TSeq>, seqan::IndexQGram<seqan::Shape<seqan::Dna, seqan::UngappedShape<8> >, seqan::OpenAddressing> > TIndex;
-    typedef seqan::Pattern<TIndex, seqan::Swift<seqan::SwiftSemiGlobal> > TPattern;
-    typedef seqan::Finder<const TSeq, seqan::Swift<seqan::SwiftSemiGlobal> > TFinder;
-    seqan::StringSet<TSeq> reads;
-    appendValue(reads,krseq);
-    seqan::reverseComplement(krseq);
-    appendValue(reads,krseq);
-    TIndex index(reads);
-    TPattern pattern(index);
-    int matchlen = seqan::length(krseq);
-
-    double epsilon = std::min(((double) options.kmerScore) / options.k,0.1);
-
-    for (auto &tr : trlist) {
-      const auto &it = trx.seqs.find(tr.tr);
-      if (it != trx.seqs.end()) {      
-        const TSeq &trseq = it->second;
-        TFinder finder(trseq);
-        while (find(finder, pattern, epsilon, options.k)) {
-          seqan::Finder<const TSeq> verifyFinder(trseq);
-          seqan::setPosition(verifyFinder, seqan::beginPosition(finder));
-          seqan::Pattern<const TSeq, seqan::Myers<>> verifyPattern(reads[seqan::position(pattern).i1]);
-          while (seqan::find(verifyFinder, verifyPattern, -((int) (epsilon*options.k))) 
-              && seqan::position(verifyFinder) < seqan::endPosition(seqan::infix(finder))) {
-            //std::cout << seqan::infix(finder)  << " -- " << tr.tr << std::endl;
-            //std::cout << reads[seqan::position(pattern).i1] << " -- " << rec.n1 << ((rec.type == FusionRecord::PAIR) ? " PAIR" : " SPLIT") << std::endl;
-            return true;
-          }
-        }
-      }
-    }
-    return false;
-  };
   
   // does any of the matcing k-mers map to one of the other transcript with errors?
-  if (mapKmersWithErrors(rs1,rec.tr2)) {
+  if (mapKmersWithErrors(rs1,rec.tr2, trx, options.k, options.kmerScore)) {
     return true;
   }
-  if (mapKmersWithErrors(rs2,rec.tr1)) {
+  if (mapKmersWithErrors(rs2,rec.tr1, trx, options.k, options.kmerScore)) {
     return true;
   }
   
@@ -285,165 +445,13 @@ bool filterFusionRecord(const Transcriptome &trx, ProgramOptions& options, const
   // does the entire read map to the respective transcripts?
   std::vector<TranscriptPos> filtered_tr1, filtered_tr2;
 
-  auto getSequencesFromTrs = [&](const std::vector<TranscriptPos> &trs, int length, bool orient = true) -> std::unordered_map<std::string, std::vector<TranscriptPos>> {
-    std::unordered_map<std::string, std::vector<TranscriptPos>> tlist;
-    for (const TranscriptPos &trpos : trs) {
-      auto git = trx.trxToGeneId.find(trpos.tr);
-      if (git == trx.trxToGeneId.end()) {
-        continue;
-      }
-      auto gene_id = git->second; //TODO refactor this out
-      auto &genemodel = trx.genes.find(gene_id)->second;
-      auto &trmodel = genemodel.transcripts.find(trpos.tr)->second;
-      if (trmodel.type != BioType::PROTEIN) {
-        continue; // modify
-      }
-      const auto& trseq = trx.seqs.find(trmodel.id)->second;
-      int pos = trpos.pos-1; // 1-based like SAM
-      int tr_start = (trpos.strand == Strandedness::FORWARD) ? pos : pos - length+1;
-      int tr_stop = (trpos.strand == Strandedness::FORWARD) ? pos + length : pos+1; // off by one?
-
-      // discard off bounds things
-      if (tr_start < 0) {
-        tr_start = 0;
-      }
-
-      if (tr_stop > seqan::length(trseq)) {
-        tr_stop = seqan::length(trseq);
-      }
-
-      auto read_match = seqan::CharString(seqan::infix(trseq, tr_start, tr_stop));
-      if ((trpos.strand == Strandedness::REVERSE) == orient) {
-        seqan::reverseComplement(read_match);
-      }
-
-      std::string tseq(seqan::toCString(read_match));
-      tlist[tseq].push_back(trpos);
-    }
-    return std::move(tlist);
-  };
-
-  auto mapReadsToTranscriptPos = [&](const std::string &seq, const std::vector<TranscriptPos> &trs, std::vector<TranscriptPos> &out_tr) {
-    std::unordered_map<std::string, std::vector<TranscriptPos>> tlist;
-    int readlen = seq.size();
-    tlist = getSequencesFromTrs(trs, readlen);
-
-    for (auto &it : tlist) {
-      auto& tseq = it.first;
-      auto& tposv = it.second;
-
-      seqan::CharString read(seq.c_str());
-      seqan::CharString ref(tseq.c_str()); // inefficient, refactor at some point
-
-      int ascore = seqan::globalAlignmentScore(read, ref, seqan::MyersBitVector());
-      if ( ascore >= -options.alignScore) {
-        out_tr.insert(out_tr.end(), tposv.begin(), tposv.end());
-        // debuggingstd::cout <<
-        /*
-        typedef seqan::Align<seqan::CharString, seqan::ArrayGaps> TAlign;
-        TAlign align;
-        seqan::resize(seqan::rows(align), 2);
-        seqan::assignSource(seqan::row(align, 0), read);
-        seqan::assignSource(seqan::row(align, 1), ref); 
-        int score = seqan::globalAlignment(align, seqan::Score<int, seqan::Simple>(0, -1, -1));
-        std::cout << "Score: " << score << std::endl;
-        std::cout << align + std::endl;
-        */
-      }
-
-    }
-  };
-
-  mapReadsToTranscriptPos(rec.seq1, rec.tr1, filtered_tr1);
-  mapReadsToTranscriptPos(rec.seq2, rec.tr2, filtered_tr2);
+  mapReadsToTranscriptPos(rec.seq1, rec.tr1, filtered_tr1, trx, options.alignScore);
+  mapReadsToTranscriptPos(rec.seq2, rec.tr2, filtered_tr2, trx, options.alignScore);
 
 
-  auto allSameStrand = [&](const std::vector<TranscriptPos> trp, Strandedness& s) -> bool {
-    if (trp.empty()) {
-      return false;
-    }
-    s = trp[0].strand;    
-    for (const auto &tp : trp) {
-      if (tp.strand != s) {
-        return false;
-      }
-    }
-    return true;
-  };
+  
 
-  auto splitAlignReads = [&](const std::string &seq, const std::vector<TranscriptPos> &trsplit, const std::vector<TranscriptPos> &trsafe, std::vector<std::pair<TranscriptPos, TranscriptPos>> &out, int& splitPos) {
-    // 
-    splitPos = -1;
-    std::unordered_map<std::string, std::vector<TranscriptPos>> trsplitlist, trsafelist;
-    int readlen = seq.size();
-    int fraglen = options.insertSize;
-    if (fraglen < 2*readlen) {
-      fraglen = 2*readlen;
-    }
-    trsplitlist = getSequencesFromTrs(trsplit, readlen);
-    trsafelist = getSequencesFromTrs(trsafe, fraglen, false); // use false here?
-
-    for (auto &tsplit : trsplitlist) {      
-      for (auto &tsafe : trsafelist) {
-
-        Strandedness splitStrand, safeStrand;
-        bool allSameSplit = allSameStrand(tsplit.second, splitStrand);
-        bool allSameSafe = allSameStrand(tsafe.second, safeStrand);
-
-        if (!allSameSafe || !allSameSplit) {          
-          //std::cout << "not all same direction " + std::endl;
-          continue; // weird mapping, fix later
-        }
-        if (splitStrand == safeStrand) {
-          //std::cout << "not same strand " + std::endl;
-          continue; // weird potential fusion, TODO look into this
-        }
-        bool forwardRead = (splitStrand == Strandedness::FORWARD);
-        // see if we can align across the sequences        
-        seqan::CharString read(seq.c_str());
-        seqan::CharString splitref(tsplit.first.c_str()); // inefficient, refactor at some point
-        seqan::CharString saferef(tsafe.first.c_str());
-
-        seqan::Gaps<seqan::CharString> readRowLeft, readRowRight, splitRowLeft, safeRowRight;
-        seqan::setSource(readRowLeft, read);
-        seqan::setSource(readRowRight, read);
-        seqan::setSource(splitRowLeft, splitref);
-        seqan::setSource(safeRowRight, saferef);
-
-        seqan::Score<int, seqan::Simple> scoringScheme(0,-1,-1);
-        seqan::AlignConfig<false, true, true, false> config;
-        int splitScore = seqan::splitAlignment(readRowLeft, splitRowLeft, readRowRight, safeRowRight, scoringScheme, config);
-        // debug
-        /*
-        std::cout << std::endl + "Score : " + splitScore + std::endl; 
-        std::cout << "splitRowLEFT: " + splitRowLeft + std::endl;
-        std::cout << "READLEFT    : " + readRowLeft + std::endl;
-        std::cout << "safeRowRight: " + safeRowRight + std::endl;
-        std::cout << "READRIGHT   : " + readRowRight + std::endl;
-        */
-        if (splitScore >= -options.alignScore) {
-          if (splitPos < 0) {
-            splitPos = seqan::toSourcePosition(readRowLeft, seqan::clippedEndPosition(readRowLeft));
-          }
-          for (const auto& t1 : tsplit.second) {
-            for (const auto& t2 : tsafe.second) {
-              TranscriptPos t2copy;
-              t2copy.tr = t2.tr;
-              t2copy.strand = (t2.strand == Strandedness::FORWARD) ? Strandedness::REVERSE : Strandedness::FORWARD; 
-              int t2pos = seqan::toSourcePosition(safeRowRight, 0);
-              int t2clip= seqan::toSourcePosition(readRowRight, 0); //seqan::clippedBeginPosition(readRowRight));
-              if (forwardRead) {
-                t2copy.pos = t2.pos - seqan::length(saferef) + t2pos + (seqan::length(splitref) - t2clip);
-              } else {
-                t2copy.pos = t2.pos + seqan::length(saferef) - t2pos -1;
-              }
-              out.push_back({t1, t2copy});
-            }
-          }
-        }
-      }
-    }    
-  };
+ 
 
 
 
@@ -452,11 +460,11 @@ bool filterFusionRecord(const Transcriptome &trx, ProgramOptions& options, const
   
   if (filtered_tr1.empty() && filtered_tr2.empty()) {
     int pos1,pos2;
-    splitAlignReads(rec.seq1, rec.tr1, rec.tr2, split_reads1, pos1);
+    splitAlignReads(rec.seq1, rec.tr1, rec.tr2, split_reads1, pos1, trx, options.alignScore, options.insertSize);
     if (split_reads1.empty()) {
       return true;
     } 
-    splitAlignReads(rec.seq2, rec.tr2, rec.tr1, split_reads2, pos2);
+    splitAlignReads(rec.seq2, rec.tr2, rec.tr1, split_reads2, pos2, trx, options.alignScore, options.insertSize);
     if (split_reads2.empty()) {
       return true;
     }
@@ -482,8 +490,8 @@ bool filterFusionRecord(const Transcriptome &trx, ProgramOptions& options, const
       }
     }    
 
-    get_gene_set(splitrec.tr1, splitrec.g1);
-    get_gene_set(splitrec.tr2, splitrec.g2);
+    get_gene_set(splitrec.tr1, splitrec.g1, trx);
+    get_gene_set(splitrec.tr2, splitrec.g2, trx);
     
     splitrec.splitPos1 = pos1;
     splitrec.splitPos2 = pos2;
@@ -496,7 +504,7 @@ bool filterFusionRecord(const Transcriptome &trx, ProgramOptions& options, const
     splitrec.sp2 = std::move(split_reads2); 
   } else if (filtered_tr1.empty() && !filtered_tr2.empty()) {
     int pos1;
-    splitAlignReads(rec.seq1, rec.tr1, rec.tr2, split_reads1, pos1);
+    splitAlignReads(rec.seq1, rec.tr1, rec.tr2, split_reads1, pos1, trx, options.alignScore, options.insertSize);
     if (split_reads1.empty()) {
       return true;
     }
@@ -513,8 +521,8 @@ bool filterFusionRecord(const Transcriptome &trx, ProgramOptions& options, const
       }
     }
     splitrec.tr2 = std::move(filtered_tr2);
-    get_gene_set(splitrec.tr1, splitrec.g1);
-    get_gene_set(splitrec.tr2, splitrec.g2);
+    get_gene_set(splitrec.tr1, splitrec.g1, trx);
+    get_gene_set(splitrec.tr2, splitrec.g2, trx);
     splitrec.splitPos1 = pos1;
     splitrec.dir1 = split_reads1[0].first.strand == Strandedness::FORWARD;
     splitrec.dir2 = !splitrec.dir1; 
@@ -523,7 +531,7 @@ bool filterFusionRecord(const Transcriptome &trx, ProgramOptions& options, const
   } else if (!filtered_tr1.empty() && filtered_tr2.empty()) {
     // splitalign read 2
     int pos2;
-    splitAlignReads(rec.seq2, rec.tr2, rec.tr1, split_reads2, pos2);
+    splitAlignReads(rec.seq2, rec.tr2, rec.tr1, split_reads2, pos2, trx, options.alignScore, options.insertSize);
     if (split_reads2.empty()) {
       return true;
     }
@@ -540,8 +548,8 @@ bool filterFusionRecord(const Transcriptome &trx, ProgramOptions& options, const
         splitrec.tr2.push_back(std::move(t));
       }
     }
-    get_gene_set(splitrec.tr1, splitrec.g1);
-    get_gene_set(splitrec.tr2, splitrec.g2);
+    get_gene_set(splitrec.tr1, splitrec.g1, trx);
+    get_gene_set(splitrec.tr2, splitrec.g2, trx);
     splitrec.splitPos1 = -1;
     splitrec.splitPos2 = pos2;
     splitrec.dir1 = split_reads2[0].first.strand == Strandedness::FORWARD;
@@ -595,8 +603,8 @@ bool filterFusionRecord(const Transcriptome &trx, ProgramOptions& options, const
     splitrec.n1 = rec.n1;
     splitrec.n2 = rec.n2;
     
-    get_gene_set(splitrec.tr1, splitrec.g1);
-    get_gene_set(splitrec.tr2, splitrec.g2);
+    get_gene_set(splitrec.tr1, splitrec.g1, trx);
+    get_gene_set(splitrec.tr2, splitrec.g2, trx);
     splitrec.splitPos1 = -1;
     splitrec.splitPos2 = -1;
     splitrec.dir1 = st1 == Strandedness::FORWARD; // check read 1
@@ -606,183 +614,138 @@ bool filterFusionRecord(const Transcriptome &trx, ProgramOptions& options, const
   return false;
 }
 
-void processFusions(const Transcriptome &trx, ProgramOptions& options) {
-  // open fusion file and parse
-  std::ifstream in(options.fusionFile);
 
-  std::string line;
-  std::vector<std::pair<FusionRecord, SplitRecord>> fusions;
-  int n = 0;
-  int count=0;
+ void findTranscriptSplit(const std::pair<TranscriptPos, TranscriptPos> &sp, int splitPos, bool dir, int readlen, SplitInfoMap &out, int alignScore) {
+  if (readlen - splitPos < std::max(8, 2*alignScore)) {
+    return;
+  }    
+  SplitInfo spi;
 
-  while (std::getline(in,line)) {
-    if (line.size() >= 4 && line.substr(0,4) == "TYPE") {
-      //std::cout << line << "\n";
-      continue;
-    }
-    
-    count++;
-    std::istringstream iss(line);
-    FusionRecord rec;
-    SplitRecord splitrec;
-    iss >> rec;
-    if (!filterFusionRecord(trx,options,rec, splitrec)) {
-      //std::cout << line << "\n";
-      n++;
-      fusions.push_back({std::move(rec), std::move(splitrec)});
-    }
-  }
-  std::cout.flush();
-
-  // create gene graph
-  GeneGraph G;
-  int fi = 0;
-  for (const auto& p : fusions) {
-    for (const auto &g1 : p.second.g1) {
-      for (const auto &g2 : p.second.g2) {
-        /*G[g1].insert({g2,fi});
-        G[g2].insert({g1,fi});*/
-        G[g1][g2].push_back(fi);
-        G[g2][g1].push_back(fi);
-      }
-    }
-    ++fi;
-  }
+  spi.tr1 = sp.first.tr;
+  spi.tr2 = sp.second.tr;    
+  spi.strand1 = sp.first.strand == Strandedness::FORWARD;
+  spi.strand2 = sp.second.strand == Strandedness::FORWARD;
   
 
-  using SplitInfoMap = std::unordered_map<SplitInfo, int>;
+  // set direction as well.
+  if (spi.strand1) {
+    spi.pos1 = sp.first.pos + (splitPos-1);
+  } else {
+    spi.pos1 = sp.first.pos - splitPos;
+  }
+  if (spi.strand2) {
+    spi.pos2 = sp.second.pos - (readlen - splitPos);
+  } else {
+    spi.pos2 = sp.second.pos; //+ (readlen - splitPos);
+  }
 
-  auto findTranscriptSplit = [&](const std::pair<TranscriptPos, TranscriptPos> &sp, int splitPos, bool dir, int readlen, SplitInfoMap &out) {
-    if (readlen - splitPos < std::max(8, 2*options.alignScore)) {
-      return;
-    }    
-    SplitInfo spi;
+  // reverse complement of 
+  if (!spi.strand1 && !spi.strand2) {
+    std::swap(spi.tr1,spi.tr2);
+    std::swap(spi.pos1,spi.pos2);
+    spi.strand1 = !spi.strand1;
+    spi.strand2 = !spi.strand2;
+  }
 
-    spi.tr1 = sp.first.tr;
-    spi.tr2 = sp.second.tr;    
-    spi.strand1 = sp.first.strand == Strandedness::FORWARD;
-    spi.strand2 = sp.second.strand == Strandedness::FORWARD;
+  spi.dir1 = true;
+  spi.dir2 = false;
+
+  auto it = out.find(spi);
+  if (it == out.end()) {
+    out.insert({std::move(spi),1});
+  } else {
+    it->second++;
+  }
+}
+
+
+
+int mapToClosestExon(const std::string &tr, int pos, bool forward, const Transcriptome& trx) {
+  const auto git = trx.trxToGeneId.find(tr);
+  int mindist = pos;
+  if (git != trx.trxToGeneId.end()) {
+    const std::string gid = git->second;
+    const auto &gm = (trx.genes.find(gid))->second;
+    const auto &trm = (gm.transcripts.find(tr))->second;
+    int a = 0,b=0;
     
-
-    // set direction as well.
-    if (spi.strand1) {
-      spi.pos1 = sp.first.pos + (splitPos-1);
-    } else {
-      spi.pos1 = sp.first.pos - splitPos;
-    }
-    if (spi.strand2) {
-      spi.pos2 = sp.second.pos - (readlen - splitPos);
-    } else {
-      spi.pos2 = sp.second.pos; //+ (readlen - splitPos);
-    }
-
-    // reverse complement of 
-    if (!spi.strand1 && !spi.strand2) {
-      std::swap(spi.tr1,spi.tr2);
-      std::swap(spi.pos1,spi.pos2);
-      spi.strand1 = !spi.strand1;
-      spi.strand2 = !spi.strand2;
-    }
-
-    spi.dir1 = true;
-    spi.dir2 = false;
-
-    auto it = out.find(spi);
-    if (it == out.end()) {
-      out.insert({std::move(spi),1});
-    } else {
-      it->second++;
-    }
-  };
-
-
-
-  auto mapToClosestExon = [&](const std::string &tr, int pos, bool forward) -> int {
-    const auto git = trx.trxToGeneId.find(tr);
-    int mindist = pos;
-    if (git != trx.trxToGeneId.end()) {
-      const std::string gid = git->second;
-      const auto &gm = (trx.genes.find(gid))->second;
-      const auto &trm = (gm.transcripts.find(tr))->second;
-      int a = 0,b=0;
-      
-      for (int i = 0; i < trm.exons.size(); i++) {        
-        b += (trm.exons[i].stop - trm.exons[i].start);
-        // exon is from [a,b)
-        if (a <= pos  && pos < b) {
-          if ((pos-a) < abs(mindist)) {
-            mindist = pos-a;
-          }  
-          if ((b - pos) < abs(mindist)) {
-            mindist = pos - b;
-          }
-          //mindist = std::min(std::min(pos-a, b - pos), mindist);
+    for (int i = 0; i < trm.exons.size(); i++) {        
+      b += (trm.exons[i].stop - trm.exons[i].start);
+      // exon is from [a,b)
+      if (a <= pos  && pos < b) {
+        if ((pos-a) < abs(mindist)) {
+          mindist = pos-a;
+        }  
+        if ((b - pos) < abs(mindist)) {
+          mindist = pos - b;
         }
-        a = b;
+        //mindist = std::min(std::min(pos-a, b - pos), mindist);
       }
+      a = b;
     }
-    return mindist; 
-  };
+  }
+  return mindist; 
+}
 
-  auto mapToForwardExon = [&](const std::string &tr, int pos) -> std::pair<int,int> {
-    const auto git = trx.trxToGeneId.find(tr);
+std::pair<int,int> mapToForwardExon (const std::string &tr, int pos, const Transcriptome &trx) {
+  const auto git = trx.trxToGeneId.find(tr);
 
-    int minPosDist = std::numeric_limits<int>::max();
-    int minNegDist = 0;
-    if (git != trx.trxToGeneId.end()) {
-      const std::string gid = git->second;
-      const auto &gm = (trx.genes.find(gid))->second;
-      const auto &trm = (gm.transcripts.find(tr))->second;
-      int a = 0,b=0;
-      
-      for (int i = 0; i < trm.exons.size(); i++) {        
-        b += (trm.exons[i].stop - trm.exons[i].start);
-        // exon is from [a,b)
-        if (a <= pos  && pos < b) {
-          if ((a-pos) < minNegDist) {
-            minNegDist = a-pos;
-          }  
-          if ((b - pos) < minPosDist) {
-            minPosDist = b - pos;
-          }          
-        }
-        a = b;
+  int minPosDist = std::numeric_limits<int>::max();
+  int minNegDist = 0;
+  if (git != trx.trxToGeneId.end()) {
+    const std::string gid = git->second;
+    const auto &gm = (trx.genes.find(gid))->second;
+    const auto &trm = (gm.transcripts.find(tr))->second;
+    int a = 0,b=0;
+    
+    for (int i = 0; i < trm.exons.size(); i++) {        
+      b += (trm.exons[i].stop - trm.exons[i].start);
+      // exon is from [a,b)
+      if (a <= pos  && pos < b) {
+        if ((a-pos) < minNegDist) {
+          minNegDist = a-pos;
+        }  
+        if ((b - pos) < minPosDist) {
+          minPosDist = b - pos;
+        }          
       }
+      a = b;
     }
-    return std::make_pair(minNegDist, minPosDist); 
-  };
+  }
+  return std::make_pair(minNegDist, minPosDist); 
+}
 
   
-  auto snapToJunction = [&](const SplitInfoMap &splits, int snapDist) -> SplitInfoMap {
-    SplitInfoMap ret;
-    for (const auto &spp : splits) {
-      auto sp = spp.first;      
-      int split_reads = spp.second;
+SplitInfoMap snapToJunction(const SplitInfoMap &splits, int snapDist, const Transcriptome& trx) {
+  SplitInfoMap ret;
+  for (const auto &spp : splits) {
+    auto sp = spp.first;      
+    int split_reads = spp.second;
 
-      int d1 = mapToClosestExon(sp.tr1,sp.pos1, sp.strand1);
-      int d2 = mapToClosestExon(sp.tr2,sp.pos2, sp.strand2);
+    int d1 = mapToClosestExon(sp.tr1,sp.pos1, sp.strand1, trx);
+    int d2 = mapToClosestExon(sp.tr2,sp.pos2, sp.strand2, trx);
 
-      int gap = d2 - d1;
-      
-      if (std::abs(d1) <= snapDist && std::abs(d2) <= snapDist) {
-        SplitInfo spcopy = sp;
-        spcopy.pos1 = sp.pos1 - d1;
-        spcopy.pos2 = sp.pos2 - d2;
-        auto it = ret.find(spcopy);
-        if (it != ret.end()) {
-          it->second += split_reads;
-        } else {
-          ret.insert({spcopy,split_reads});
-        }
+    int gap = d2 - d1;
+    
+    if (std::abs(d1) <= snapDist && std::abs(d2) <= snapDist) {
+      SplitInfo spcopy = sp;
+      spcopy.pos1 = sp.pos1 - d1;
+      spcopy.pos2 = sp.pos2 - d2;
+      auto it = ret.find(spcopy);
+      if (it != ret.end()) {
+        it->second += split_reads;
       } else {
-        ret.insert(spp);
+        ret.insert({spcopy,split_reads});
       }
+    } else {
+      ret.insert(spp);
     }
-    return std::move(ret);
-  };
+  }
+  return std::move(ret);
+};
 
 
-  auto findTranscriptInVector = [&](const std::vector<TranscriptPos> v, std::string t) {
+  bool findTranscriptInVector(const std::vector<TranscriptPos> v, std::string t) {
     for (const auto &x : v) {
       if (x.tr == t) {
         return true;
@@ -792,7 +755,7 @@ void processFusions(const Transcriptome &trx, ProgramOptions& options) {
   };
 
 
-  auto writeFusions = [&](std::ofstream& jsonOut, std::ofstream& fastaOut, bool filter) {
+  void writeFusions(std::ofstream& jsonOut, std::ofstream& fastaOut, bool filter, const Transcriptome& trx, const FusionVector& fusions, const GeneGraph& G, int alignScore, int insertSize) {
     // write json headers and info
     jsonOut << "{\n  \"genes\" : [\n";
     bool firstJsonCommaGenes = true;
@@ -826,13 +789,13 @@ void processFusions(const Transcriptome &trx, ProgramOptions& options) {
             if (sr.splitPos1 >= 0) {
               int readlen = fr.seq1.size();
               for (const auto &sp : sr.sp1) {
-                findTranscriptSplit(sp, sr.splitPos1, sr.dir1, readlen, splits);
+                findTranscriptSplit(sp, sr.splitPos1, sr.dir1, readlen, splits, alignScore);
               }
             }
             if (sr.splitPos2 >= 0) {
               int readlen = fr.seq2.size();
               for (const auto &sp : sr.sp2) {
-                findTranscriptSplit(sp, sr.splitPos2, sr.dir2, readlen, splits);
+                findTranscriptSplit(sp, sr.splitPos2, sr.dir2, readlen, splits, alignScore);
               }
             } 
           }
@@ -861,12 +824,12 @@ void processFusions(const Transcriptome &trx, ProgramOptions& options) {
           std::unordered_set<std::string> fnames;
 
           bool firstJsonCommaTrans = true;
-          SplitInfoMap snappedSplits = snapToJunction(splits, 4);      
+          SplitInfoMap snappedSplits = snapToJunction(splits, 4, trx);      
           for (auto & spp : snappedSplits) {
             auto &sp = spp.first;          
             int split_reads = spp.second;
-            int ed1 = mapToClosestExon(sp.tr1,sp.pos1, sp.strand1);
-            int ed2 = mapToClosestExon(sp.tr2,sp.pos2, sp.strand2);
+            int ed1 = mapToClosestExon(sp.tr1,sp.pos1, sp.strand1, trx);
+            int ed2 = mapToClosestExon(sp.tr2,sp.pos2, sp.strand2, trx);
             int tp1 = sp.pos1 - ed1;
             int tp2 = sp.pos2 - ed2;
             const auto & seq1 = trx.seqs.find(sp.tr1)->second;
@@ -972,8 +935,8 @@ void processFusions(const Transcriptome &trx, ProgramOptions& options) {
                     int tp2 = (t2strand) ? std::min(t2.pos+rlen2, (int)seqan::length(seq2)-1) : std::max(t2.pos-rlen2,0);
 
                     // distances to exon boundaries
-                    auto ped1 = mapToForwardExon(t1.tr, tp1);
-                    auto ped2 = mapToForwardExon(t2.tr, tp2);
+                    auto ped1 = mapToForwardExon(t1.tr, tp1, trx);
+                    auto ped2 = mapToForwardExon(t2.tr, tp2, trx);
 
                     // pick most reliable
                     int ed1 = 0;
@@ -1044,7 +1007,7 @@ void processFusions(const Transcriptome &trx, ProgramOptions& options) {
                 int insLen = x.second;
                 if ((findTranscriptInVector(fusions[vi].second.tr1, spi.tr1) && findTranscriptInVector(fusions[vi].second.tr2, spi.tr2))
                          || (findTranscriptInVector(fusions[vi].second.tr1, spi.tr2) && findTranscriptInVector(fusions[vi].second.tr2, spi.tr1))) {                          
-                  if (!filter || (insLen <= options.insertSize)) {
+                  if (!filter || (insLen <= insertSize)) {
                     readsInTr.push_back(vi);
                   }
                 }
@@ -1135,13 +1098,58 @@ void processFusions(const Transcriptome &trx, ProgramOptions& options) {
     }
     jsonOut << "\n  ]\n}";
   };
-  
+
+
+
+
+void processFusions(const Transcriptome &trx, ProgramOptions& options) {
+  // open fusion file and parse
+  std::ifstream in(options.fusionFile);
+
+  std::string line;
+  FusionVector fusions;
+  int n = 0;
+  int count=0;
+
+  while (std::getline(in,line)) {
+    if (line.size() >= 4 && line.substr(0,4) == "TYPE") {
+      //std::cout << line << "\n";
+      continue;
+    }
+    
+    count++;
+    std::istringstream iss(line);
+    FusionRecord rec;
+    SplitRecord splitrec;
+    iss >> rec;
+    if (!filterFusionRecord(trx,options,rec, splitrec)) {
+      //std::cout << line << "\n";
+      n++;
+      fusions.push_back({std::move(rec), std::move(splitrec)});
+    }
+  }
+  std::cout.flush();
+
+  // create gene graph
+  GeneGraph G;
+  int fi = 0;
+  for (const auto& p : fusions) {
+    for (const auto &g1 : p.second.g1) {
+      for (const auto &g2 : p.second.g2) {
+        /*G[g1].insert({g2,fi});
+        G[g2].insert({g1,fi});*/
+        G[g1][g2].push_back(fi);
+        G[g2][g1].push_back(fi);
+      }
+    }
+    ++fi;
+  }
   
   // write unfiltered files
   std::ofstream unFilteredFastaOut(options.outprefix + ".unfiltered.fusions.fasta");
   std::ofstream unFilteredJsonOut(options.outprefix + ".unfiltered.json");
 
-  writeFusions(unFilteredJsonOut, unFilteredFastaOut, false);
+  writeFusions(unFilteredJsonOut, unFilteredFastaOut, false, trx, fusions, G, options.alignScore, options.insertSize);
   unFilteredFastaOut.close();
   unFilteredJsonOut.close();
 
@@ -1149,7 +1157,7 @@ void processFusions(const Transcriptome &trx, ProgramOptions& options) {
   std::ofstream fastaOut(options.outprefix + ".fusions.fasta");
   std::ofstream jsonOut(options.outprefix + ".json");
 
-  writeFusions(jsonOut, fastaOut, true);
+  writeFusions(jsonOut, fastaOut, true, trx, fusions, G, options.alignScore, options.insertSize);
   fastaOut.close();
   jsonOut.close();
 
