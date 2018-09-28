@@ -73,6 +73,70 @@ struct TranscriptModel {
   std::vector<ExonModel> exons;
   Strandedness strand;
   BioType type;
+
+  std::pair<int,int> find_exon(const int local_pos) const {
+    int trpos = 0;
+    for (int i = 0; i < exons.size(); i++) {          
+      const auto &exon = exons[i];
+      int len = exon.stop - exon.start;
+      if (trpos <= local_pos && local_pos < trpos + len) {
+        return {i,trpos};
+      }
+      trpos += len;
+    }
+    return {-1,0};
+  }
+
+  bool translateGenomePosition(const std::string &chr, const int chrpos, int &_trpos, int &ex) const {
+    _trpos = 0;
+    for (ex = 0; ex < exons.size(); ex++) {
+      const auto& exon = exons[ex];
+      if (exon.start <= chrpos && chrpos < exon.stop) {
+        if (strand == Strandedness::FORWARD) {
+          _trpos += chrpos - exon.start;
+        } else {
+          _trpos += exon.stop - chrpos;
+        }
+        return true;  
+      }
+      _trpos += exon.stop - exon.start;
+    }
+    ex = -1;
+    _trpos = -1;
+    return false;
+  }
+
+  bool translateTrPosition(const int _trpos, std::string &_chr, int& chrpos) const {
+    _chr = chr;
+    if (strand == Strandedness::UNKNOWN) {
+      return false;
+    } 
+    bool fw = (strand == Strandedness::FORWARD);
+
+    auto ex = find_exon(_trpos);
+    if (ex.first == -1) {
+      return false;
+    }
+    auto exon = exons[ex.first];
+    int len = (exon.stop - exon.start);
+    int epos = _trpos - ex.second;    
+    assert(epos >= 0 && len > 0);
+    if (exon.strand == Strandedness::FORWARD) {
+      chrpos = exon.start + epos;
+    } else {
+      chrpos = exon.stop  - epos;
+    }
+ 
+    if (epos > len && ex.first == exons.size()-1) {
+      // goes beyond last exon, map to end
+      chrpos = stop + epos - 1; // ???
+    }
+    return true;
+  }
+
+
+
+
 };
 
 
@@ -93,7 +157,7 @@ struct Transcriptome {
   
   // maps transcript tr and 0-based position trpos
   //      to chr:chrpos in genome mapping to gene gene_id
-  bool translateTrPosition(const std::string &tr, const int _trpos, std::string &chr, int& chrpos, std::string &gene_id) {
+  bool translateTrPosition(const std::string &tr, const int _trpos, std::string &chr, int& chrpos, std::string &gene_id) const {
     auto gid_it = trxToGeneId.find(tr);
     if (gid_it == trxToGeneId.end()) {
       return false;
@@ -109,35 +173,9 @@ struct Transcriptome {
       return false;
     }
 
-    auto &trxmodel = t_it->second;
-    chr = trxmodel.chr;    
-    if (trxmodel.strand == Strandedness::UNKNOWN) {
-      return false;
-    } 
-    bool fw = (trxmodel.strand == Strandedness::FORWARD);
-    int trpos = _trpos;
-    chrpos = trxmodel.start;
-    for (auto& exon : trxmodel.exons) {
-      int len = (exon.strand == Strandedness::FORWARD) ? (exon.stop - exon.start) : (exon.start - exon.stop);
-      assert(len > 0);
-      if (trpos < len) {
-        // maps to this exon
-        chrpos = exon.start;
-        if (exon.strand == Strandedness::FORWARD) {
-          chrpos += trpos;
-        } else {
-          chrpos -= trpos;
-        }
-        break;
-      } else {
-        trpos -= len;
-      }
-    }
-    if (trpos > 0) {
-      // goes beyond last exon, map to end
-      chrpos = trxmodel.stop + trpos - 1;
-    }
-    return true;
+    auto &trmodel = t_it->second;
+
+    return trmodel.translateTrPosition(_trpos, chr, chrpos);    
   }
 };
 

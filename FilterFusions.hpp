@@ -272,6 +272,228 @@ std::unordered_map<std::string, std::vector<TranscriptPos>> getSequencesFromTrs(
   return std::move(tlist);
 }
 
+
+/*
+
+// find exon id, containing genome coordinate pos, -1 if not found
+int find_exon_genome(const TranscriptModel& trmodel,  const int pos) {  
+  for (int i = 0; i < trmodel.exons.size(); i++) {          
+    const auto &exon = trmodel.exons[i];
+    int len = exon.stop - exon.start;
+    if (exon.start <= pos && pos < exon.stop) {
+      return i;
+    }
+
+  }
+  return -1;
+}
+*/
+
+bool backOffEmptyTrlist(std::vector<TranscriptPos> &trs, std::pair<int, int> kpos, int k, const Transcriptome &trx, bool orient = true) {
+  std::string chr;
+  std::unordered_map<std::string, std::pair<Strandedness, std::vector<std::pair<int,int>>>> gene_intervals;
+  if (trs.empty()) {
+    return false;
+  }
+
+  int min_overhang = 5; // need at least 5 bp overhanging to 
+
+  // is the k-mer match on the FW strand of the transcript
+  bool fw = (trs.begin()->strand == Strandedness::FORWARD);
+  // how far into the read do we start?
+  int start_shift = ((fw) ? kpos.first : - kpos.second - k + 1);
+  int stop_shift = ((fw) ? kpos.second + k : kpos.first + 1);
+
+  for (const TranscriptPos &trpos : trs) {
+    auto git = trx.trxToGeneId.find(trpos.tr);
+    if (git == trx.trxToGeneId.end()) {
+      continue;
+    }
+    auto gene_id = git->second;
+    auto &genemodel = trx.genes.find(gene_id)->second;
+    auto &trmodel = genemodel.transcripts.find(trpos.tr)->second;
+
+    if (chr.empty()) {
+      chr = genemodel.chr;
+    } else {
+      if (chr != genemodel.chr) {
+        return false; // cannot map to a different chromosome
+      }
+    }
+
+    
+    int read_start = trpos.pos-1; // 1-based like SAM
+    // where in the transcript do we match
+    int kmatch_start = read_start + start_shift; // first bp of matching k-mers
+    int kmatch_stop  = read_start + stop_shift; // one past last bp of matching k-mers
+
+    // discard off bounds things
+    if (kmatch_start < 0) {
+      kmatch_start = 0;
+    }
+    
+    
+
+    auto xa = trmodel.find_exon( kmatch_start);
+    auto xb = trmodel.find_exon( kmatch_stop);
+
+    if (xa.first == -1 || xb.first == -1) {
+      continue;
+    }
+
+    if (xa.first != xb.first) {
+      const auto& a_exon = trmodel.exons[xa.first];
+      const auto& b_exon = trmodel.exons[xb.first];
+
+      
+      int a_overhang = xa.second + (a_exon.stop - a_exon.start) - kmatch_start; 
+      int b_overhang = kmatch_stop - xb.second;
+        
+      if (b_overhang <= min_overhang) {
+        kmatch_stop -= b_overhang;
+        xb = trmodel.find_exon( kmatch_stop-1); // maybe -1
+      }
+
+      if (a_overhang <= min_overhang) {
+        kmatch_start += a_overhang;
+        xa = trmodel.find_exon( kmatch_start);
+      }    
+    }
+
+
+    int gen_start, gen_stop;
+    std::vector<std::pair<int,int>> gen_regs;
+    std::string chr_tmp, gen_tmp;
+    if (!trx.translateTrPosition(trmodel.id, kmatch_start, chr_tmp, gen_start, gen_tmp)) {
+      continue;
+    }
+    if (!trx.translateTrPosition(trmodel.id, kmatch_stop-1, chr_tmp, gen_stop, gen_tmp)) {
+      continue;
+    } else {
+      if (fw) {
+        gen_stop++;
+      } else {
+        gen_stop--;
+      }
+    }
+
+   
+
+    if (xa.first == xb.first) {
+      if (fw) {
+        gen_regs.push_back({gen_start, gen_stop});
+      } else {
+        gen_regs.push_back({gen_stop, gen_start});
+      }
+    } else {
+      const auto& a_exon = trmodel.exons[xa.first];
+      const auto& b_exon = trmodel.exons[xb.first];
+      // TODO: debug this
+      if (fw) {
+        gen_regs.push_back({gen_start,a_exon.stop}); 
+        for (int i = xa.first+1; i < xb.first; i++) {
+          gen_regs.push_back({trmodel.exons[i].start, trmodel.exons[i].stop});
+        }
+        gen_regs.push_back({b_exon.start, gen_stop});
+      } else {
+        gen_regs.push_back({b_exon.start, gen_start});
+        for (int i = xb.first-1; i >= xa.first; i--) {
+          gen_regs.push_back({trmodel.exons[i].start, trmodel.exons[i].stop});
+        }
+        gen_regs.push_back({gen_stop, a_exon.stop});
+      }
+      
+    }
+
+
+    auto it = gene_intervals.find(gene_id);
+    if (it == gene_intervals.end()) {
+      gene_intervals.insert({gene_id,{trpos.strand, gen_regs}});
+    } else {
+      auto& val = it->second;
+      if (val.first != trpos.strand) {
+        // not all on the same strand
+        return false;
+      }
+      auto &v = val.second;
+      // do nothing!
+    }
+  }
+
+  std::vector<TranscriptPos> new_trs;
+  for (auto &x : gene_intervals) {
+    auto &gene_id = x.first;
+    auto strand = x.second.first;
+    const auto& interval = x.second.second;
+
+    if (interval.empty()) {
+      continue;
+    }
+    auto& genemodel = trx.genes.find(gene_id)->second;
+    // find out which transcripts contain [a,b) in an exon
+    for (auto &tr : genemodel.transcripts) {
+      auto &trmodel = tr.second;
+      // iterate through the exons
+      int trpos = 0;
+     
+      
+      bool contains = true;  
+      int a = interval.begin()->first;
+      int b = interval.rbegin()->second;
+
+
+      // find exons containing start/stop
+      int tra,trb, xa, xb;
+      trmodel.translateGenomePosition(trmodel.chr, a, tra, xa);
+      trmodel.translateGenomePosition(trmodel.chr, b, trb, xb);
+      
+      if (xa == -1 || xb == -1) {
+        continue; 
+      }
+
+      for (int i = xa; i <= xb; i++) {
+        
+        const auto& exon = trmodel.exons[i];
+        if (exon.start <= a && b < exon.stop) {
+          // ok it's contained
+        } else {
+          contains = false;
+          break;
+        }
+      }
+
+      if (contains) {
+        TranscriptPos trp;
+        trp.strand = strand;
+        trp.tr = trmodel.id;
+        trp.pos =  -1; //figure this out
+        if (strand == Strandedness::FORWARD) {
+          // a is the start, shifted by start_shift
+          trp.pos = tra - start_shift + 1;  // stupid 1-based thing         
+        } else {
+          trp.pos = trb - start_shift + 1;
+        }
+        trp.strand = strand;
+        if (trp.pos >= 0) {
+          new_trs.push_back(trp);
+          continue;
+        }
+      }
+    }
+  }
+
+
+  if (!new_trs.empty()) {
+    trs = std::move(new_trs);
+    return true;
+  } else {
+    return false;
+  }
+
+
+  return true;
+}
+
 void mapReadsToTranscriptPos(const std::string &seq, const std::vector<TranscriptPos> &trs, std::vector<TranscriptPos> &out_tr, const Transcriptome& trx, int alignScore) {
   std::unordered_map<std::string, std::vector<TranscriptPos>> tlist;
   int readlen = seq.size();
@@ -316,8 +538,11 @@ bool allSameStrand(const std::vector<TranscriptPos> trp, Strandedness& s) {
   return true;
 }
 
- void splitAlignReads(const std::string &seq, const std::vector<TranscriptPos> &trsplit, const std::vector<TranscriptPos> &trsafe, std::vector<std::pair<TranscriptPos, TranscriptPos>> &out, int& splitPos, const Transcriptome& trx, int alignScore, int insertSize) {
+ void splitAlignReads(const std::string &seq, std::vector<TranscriptPos> &trsplit, std::vector<TranscriptPos> &trsafe, std::vector<std::pair<TranscriptPos, TranscriptPos>> &out, int& splitPos, const Transcriptome& trx, const ProgramOptions& options) {
   // 
+  int alignScore = options.alignScore;
+  int insertSize = options.insertSize;
+  int k = options.k;
   splitPos = -1;
   std::unordered_map<std::string, std::vector<TranscriptPos>> trsplitlist, trsafelist;
   int readlen = seq.size();
@@ -341,8 +566,8 @@ bool allSameStrand(const std::vector<TranscriptPos> trp, Strandedness& s) {
       }
       if (splitStrand == safeStrand) {
         //std::cout << "not same strand " + std::endl;
-        continue; // weird potential fusion, TODO look into this
-      }
+        //continue; // weird potential fusion, TODO look into this
+      } 
       bool forwardRead = (splitStrand == Strandedness::FORWARD);
       // see if we can align across the sequences        
       seqan::CharString read(seq.c_str());
@@ -360,12 +585,17 @@ bool allSameStrand(const std::vector<TranscriptPos> trp, Strandedness& s) {
       int splitScore = seqan::splitAlignment(readRowLeft, splitRowLeft, readRowRight, safeRowRight, scoringScheme, config);
       // debug
       /*
-      std::cout << std::endl + "Score : " + splitScore + std::endl; 
-      std::cout << "splitRowLEFT: " + splitRowLeft + std::endl;
-      std::cout << "READLEFT    : " + readRowLeft + std::endl;
-      std::cout << "safeRowRight: " + safeRowRight + std::endl;
-      std::cout << "READRIGHT   : " + readRowRight + std::endl;
+      std::cout << std::endl;
+      std::cout << "READ  :" << read << std::endl;
+      std::cout << "SPLIT :" << splitref << std::endl;
+      std::cout << "SAFE  :" << saferef << std::endl;
+      std::cout << std::endl << "Score : " << splitScore << std::endl; 
+      std::cout << "splitRowLEFT: " << splitRowLeft << std::endl;
+      std::cout << "READLEFT    : " << readRowLeft << std::endl;
+      std::cout << "safeRowRight: " << safeRowRight << std::endl;
+      std::cout << "READRIGHT   : " << readRowRight << std::endl;
       */
+      
       if (splitScore >= -alignScore) {
         if (splitPos < 0) {
           splitPos = seqan::toSourcePosition(readRowLeft, seqan::clippedEndPosition(readRowLeft));
@@ -391,7 +621,7 @@ bool allSameStrand(const std::vector<TranscriptPos> trp, Strandedness& s) {
 }
 
 // returns true if the record should be filtered
-bool filterFusionRecord(const Transcriptome &trx, ProgramOptions& options, const FusionRecord& rec, SplitRecord &splitrec) {
+bool filterFusionRecord(const Transcriptome &trx, ProgramOptions& options, FusionRecord& rec, SplitRecord &splitrec) {
 
   std::unordered_set<std::string> g1,g2;
 
@@ -445,14 +675,20 @@ bool filterFusionRecord(const Transcriptome &trx, ProgramOptions& options, const
   // does the entire read map to the respective transcripts?
   std::vector<TranscriptPos> filtered_tr1, filtered_tr2;
 
+
+  std::pair<int,int> kp1 = rec.kpos1;
+  /*if (kp1.second == rec.seq1.length() - options.k) {
+    kp1.second = kp1.first; // don't 
+  }*/
+  backOffEmptyTrlist(rec.tr1, kp1, options.k, trx);
+  std::pair<int,int> kp2 = rec.kpos2;
+  /*if (kp2.second == rec.seq2.length() - options.k) {
+    kp2.second = kp2.first; // don't 
+  }*/
+  backOffEmptyTrlist(rec.tr2, kp2, options.k, trx);
+
   mapReadsToTranscriptPos(rec.seq1, rec.tr1, filtered_tr1, trx, options.alignScore);
   mapReadsToTranscriptPos(rec.seq2, rec.tr2, filtered_tr2, trx, options.alignScore);
-
-
-  
-
- 
-
 
 
   std::vector<std::pair<TranscriptPos, TranscriptPos>> split_reads1, split_reads2;
@@ -460,11 +696,11 @@ bool filterFusionRecord(const Transcriptome &trx, ProgramOptions& options, const
   
   if (filtered_tr1.empty() && filtered_tr2.empty()) {
     int pos1,pos2;
-    splitAlignReads(rec.seq1, rec.tr1, rec.tr2, split_reads1, pos1, trx, options.alignScore, options.insertSize);
+    splitAlignReads(rec.seq1, rec.tr1, rec.tr2, split_reads1, pos1, trx, options);
     if (split_reads1.empty()) {
       return true;
     } 
-    splitAlignReads(rec.seq2, rec.tr2, rec.tr1, split_reads2, pos2, trx, options.alignScore, options.insertSize);
+    splitAlignReads(rec.seq2, rec.tr2, rec.tr1, split_reads2, pos2, trx, options);
     if (split_reads2.empty()) {
       return true;
     }
@@ -504,7 +740,7 @@ bool filterFusionRecord(const Transcriptome &trx, ProgramOptions& options, const
     splitrec.sp2 = std::move(split_reads2); 
   } else if (filtered_tr1.empty() && !filtered_tr2.empty()) {
     int pos1;
-    splitAlignReads(rec.seq1, rec.tr1, rec.tr2, split_reads1, pos1, trx, options.alignScore, options.insertSize);
+    splitAlignReads(rec.seq1, rec.tr1, rec.tr2, split_reads1, pos1, trx, options);
     if (split_reads1.empty()) {
       return true;
     }
@@ -531,7 +767,7 @@ bool filterFusionRecord(const Transcriptome &trx, ProgramOptions& options, const
   } else if (!filtered_tr1.empty() && filtered_tr2.empty()) {
     // splitalign read 2
     int pos2;
-    splitAlignReads(rec.seq2, rec.tr2, rec.tr1, split_reads2, pos2, trx, options.alignScore, options.insertSize);
+    splitAlignReads(rec.seq2, rec.tr2, rec.tr1, split_reads2, pos2, trx, options);
     if (split_reads2.empty()) {
       return true;
     }
