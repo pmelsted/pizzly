@@ -18,7 +18,7 @@ parseCommandLine(ProgramOptions & options, int argc, char const ** argv) {
 
   // Define Options
   seqan::addOption(parser, seqan::ArgParseOption(
-      "k", "", "k-mer size used in kallisto",
+      "k", "k-mer", "k-mer size used in kallisto",
       seqan::ArgParseArgument::INTEGER, "K"));
   seqan::addOption(parser, seqan::ArgParseOption(
       "a", "align-score", "Maximum number of mismatches allowed (default: 2)",
