@@ -301,6 +301,7 @@ bool backOffEmptyTrlist(std::vector<TranscriptPos> &trs, std::pair<int, int> kpo
   // is the k-mer match on the FW strand of the transcript
   bool fw = (trs.begin()->strand == Strandedness::FORWARD);
   // how far into the read do we start?
+  // TODO: fix this
   int start_shift = ((fw) ? kpos.first : - kpos.second - k + 1);
   int stop_shift = ((fw) ? kpos.second + k : kpos.first + 1);
 
