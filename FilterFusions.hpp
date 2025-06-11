@@ -78,7 +78,7 @@ int interval_dist(int a, int b, int c, int d) {
   }
 }
 
-struct FusionRecord {
+struct FusionRecord {  
   enum TYPE {PAIR,SPLIT} type;
   std::string n1,n2,seq1,seq2;
   std::pair<int,int> kpos1,kpos2;
@@ -123,33 +123,68 @@ namespace std {
 
 std::istream& operator>>(std::istream& stream, FusionRecord &rec)
 {
-  std::string tmp;
-  if (stream >> tmp) {
-    if (tmp == "PAIR") {
-      rec.type = FusionRecord::PAIR;
-    } else if (tmp == "SPLIT") {
-      rec.type = FusionRecord::SPLIT;
-    } 
-    stream >> rec.n1 >> rec.seq1 >> tmp; // need to parse kpos1,2
-    int cpos = tmp.find(',');
-    rec.kpos1.first = std::stoi(tmp.substr(0,cpos));
-    rec.kpos1.second = std::stoi(tmp.substr(cpos+1));
-    stream >> rec.n2 >> rec.seq2 >> tmp;
-    cpos = tmp.find(',');
-    rec.kpos2.first = std::stoi(tmp.substr(0,cpos));
-    rec.kpos2.second = std::stoi(tmp.substr(cpos+1));
-    stream >> tmp; // parse splitat or NA
-    if (tmp != "NA" && tmp.size() >= 13) {
-      //splitat=(1,X)
-      rec.splitat.first = (tmp[9] == '0');
-      rec.splitat.second = std::stoi(tmp.substr(11,tmp.size()-12));
+  std::string line;
+  if (std::getline(stream, line)) {
+    std::istringstream iss(line);
+    std::string tmp;
+    
+    // Get type
+    if (std::getline(iss, tmp, '\t')) {
+      if (tmp == "PAIR") {
+        rec.type = FusionRecord::PAIR;
+      } else if (tmp == "SPLIT") {
+        rec.type = FusionRecord::SPLIT;
+      }
+      
+      // Get read1 name
+      if (std::getline(iss, rec.n1, '\t') &&
+          // Get read1 sequence
+          std::getline(iss, rec.seq1, '\t') &&
+          // Get read1 kpos
+          std::getline(iss, tmp, '\t')) {
+        
+        int cpos = tmp.find(',');
+        rec.kpos1.first = std::stoi(tmp.substr(0,cpos));
+        rec.kpos1.second = std::stoi(tmp.substr(cpos+1));
+        
+        // Get read2 name
+        if (std::getline(iss, rec.n2, '\t') &&
+            // Get read2 sequence  
+            std::getline(iss, rec.seq2, '\t') &&
+            // Get read2 kpos
+            std::getline(iss, tmp, '\t')) {
+          
+          cpos = tmp.find(',');
+          if (cpos != std::string::npos)   {
+            rec.kpos2.first = std::stoi(tmp.substr(0,cpos));
+            rec.kpos2.second = std::stoi(tmp.substr(cpos+1));
+          } else {
+            rec.kpos2.first = -1;
+            rec.kpos2.second = -1;
+          }
+          
+          // Get splitat
+          if (std::getline(iss, tmp, '\t')) {
+            if (tmp != "NA" && tmp.size() >= 13) {
+              //splitat=(1,X)
+              rec.splitat.first = (tmp[9] == '0');
+              rec.splitat.second = std::stoi(tmp.substr(11,tmp.size()-12));
+            }
+            
+            // Get transcript lists
+            std::string tr1, tr2;
+            // handle the case where tr1 or tr2 is empty
+            if (std::getline(iss, tr1, '\t')) {
+              parseTrList(tr1, rec.tr1);
+            }
+            if (std::getline(iss, tr2)) {
+              parseTrList(tr2, rec.tr2);
+            }
+          }
+        }
+      }
     }
-
-    std::string tr1,tr2;
-    stream >> tr1 >> tr2;
-    parseTrList(tr1, rec.tr1);
-    parseTrList(tr2, rec.tr2);
-  } 
+  }
   return stream;
 }
 
@@ -168,7 +203,7 @@ bool get_gene_set(const std::vector<TranscriptPos> &trlist, std::unordered_set<s
   return false;
 }
 
-ExonModel&& find_gene_range(const std::unordered_set<std::string> glist, const Transcriptome& trx, int limit = 1000) {
+ExonModel find_gene_range(const std::unordered_set<std::string> glist, const Transcriptome& trx, int limit = 1000) {
   ExonModel m;
   m.start = std::numeric_limits<int>::max();
   m.stop = -1;
@@ -185,8 +220,8 @@ ExonModel&& find_gene_range(const std::unordered_set<std::string> glist, const T
       m.stop = gene.stop;
     } else {
       if (m.chr != gene.chr) {
-        m.stop = -1; m.start =0;
-        return std::move(m);
+        m.stop = -1; m.start = 0;
+        return m;
       }
       int dist = interval_dist(m.start,m.stop, gene.start, gene.stop);
       if (dist <= limit) {
@@ -195,7 +230,7 @@ ExonModel&& find_gene_range(const std::unordered_set<std::string> glist, const T
       }
     } 
   }
-  return std::move(m);
+  return m; // Return by value instead of std::move
 }
 
 
@@ -643,11 +678,11 @@ bool filterFusionRecord(const Transcriptome &trx, ProgramOptions& options, Fusio
   auto i1 = find_gene_range(g1, trx);
   auto i2 = find_gene_range(g2, trx);
 
-  if (i1.stop < 0 || i2.stop < 0) {
+  if ((i1.stop < 0) || (options.paired && i2.stop < 0)) {
     return true;
   }
 
-  if (i1.chr == i2.chr) {
+  if (!(options.longreads) && i1.chr == i2.chr) {
     int dist = interval_dist(i1.start, i1.stop, i2.start, i2.stop);
     if (dist < 10000) {
       return true;
@@ -658,8 +693,10 @@ bool filterFusionRecord(const Transcriptome &trx, ProgramOptions& options, Fusio
   // see if the k-mer matching region of read 1 matches any of the transcripts of read 2
   
   TSeq rs1(rec.seq1.substr(rec.kpos1.first, options.k + rec.kpos1.second-rec.kpos1.first).c_str());
-  TSeq rs2(rec.seq2.substr(rec.kpos2.first, options.k + rec.kpos2.second-rec.kpos2.first).c_str());
-  
+  TSeq rs2;
+  if (options.paired) {
+    rs2 = TSeq(rec.seq2.substr(rec.kpos2.first, options.k + rec.kpos2.second-rec.kpos2.first).c_str());
+  }
 
   seqan::Align<TSeq, seqan::ArrayGaps> align;
   seqan::resize(rows(align), 2);
@@ -668,7 +705,7 @@ bool filterFusionRecord(const Transcriptome &trx, ProgramOptions& options, Fusio
   if (mapKmersWithErrors(rs1,rec.tr2, trx, options.k, options.kmerScore)) {
     return true;
   }
-  if (mapKmersWithErrors(rs2,rec.tr1, trx, options.k, options.kmerScore)) {
+  if (options.paired && mapKmersWithErrors(rs2,rec.tr1, trx, options.k, options.kmerScore)) {
     return true;
   }
   

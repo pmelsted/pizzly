@@ -40,6 +40,8 @@ parseCommandLine(ProgramOptions & options, int argc, char const ** argv) {
       seqan::ArgParseArgument::STRING, "FASTA"));
   seqan::addOption(parser, seqan::ArgParseOption(
       "", "ignore-protein", "Ignore any protein coding information in annotation"));
+  seqan::addOption(parser, seqan::ArgParseOption(
+      "", "longreads", "Use long reads"));
   
 
   seqan::setRequired(parser, "k");
@@ -63,6 +65,10 @@ parseCommandLine(ProgramOptions & options, int argc, char const ** argv) {
   getOptionValue(options.cache, parser, "cache");
   getOptionValue(options.outprefix, parser, "output");
   getArgumentValue(options.fusionFile, parser, 0);
+  if (seqan::isSet(parser, "longreads")) {
+      options.longreads = true;
+      options.paired = false;
+  }
   if (seqan::isSet(parser, "ignore-protein")) {
       options.ignoreProtein = true;
   }
